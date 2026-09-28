@@ -72,6 +72,7 @@ input[type=number]{width:100%;font:inherit;padding:10px;border-radius:8px;border
 <div class="row" id="hole"></div>
 <h2 style="margin-top:12px">Board</h2>
 <div class="row" id="board"></div>
+<div class="row" style="margin-top:8px"><button class="sec" id="manualBtn">⌨️ Enter cards manually</button></div>
 <div class="grid" id="grid"></div>
 <div class="row" style="margin-top:8px"><button class="sec" id="clear">Clear all</button></div>
 </section>
@@ -103,7 +104,7 @@ input[type=number]{width:100%;font:inherit;padding:10px;border-radius:8px;border
 <script>
 const R="23456789TJQKA",S="cdhs",SYM={c:"♣",d:"♦",h:"♥",s:"♠"};
 // slots: 0-1 hole, 2-6 board. values: card int (rank*4+suit) or null
-const slots=Array(7).fill(null);let sel=0;
+const slots=Array(7).fill(null);let sel=0;let manual=false;
 const $=id=>document.getElementById(id);
 const name=c=>R[c>>2]+SYM[S[c&3]];
 const isRed=c=>{const s=S[c&3];return s==="d"||s==="h"};
@@ -113,14 +114,16 @@ function render(){
   const mk=(i)=>{const c=slots[i];return `<div class="slot${c!=null?" f"+(isRed(c)?" r":""):""}${sel===i?" sel":""}" data-i="${i}">${c!=null?name(c):""}</div>`};
   $("hole").innerHTML=mk(0)+mk(1);
   $("board").innerHTML=[2,3,4].map(mk).join("")+'<div class="gap"></div>'+mk(5)+'<div class="gap"></div>'+mk(6);
-  document.querySelectorAll(".slot").forEach(e=>e.onclick=()=>{const i=+e.dataset.i;if(sel===i&&slots[i]!=null)slots[i]=null;sel=i;render()});
+  document.querySelectorAll(".slot").forEach(e=>e.onclick=()=>{const i=+e.dataset.i;if(sel===i&&slots[i]!=null)slots[i]=null;sel=i;manual=true;render()});
   let g="";
   for(let s=3;s>=0;s--)for(let r=12;r>=0;r--){const c=r*4+s;g+=`<button class="${"dh".includes(S[s])||S[s]==="h"?"r":""}" data-c="${c}" ${slots.includes(c)?"disabled":""}>${R[r]}${SYM[S[s]]}</button>`}
   $("grid").innerHTML=g;
-  $("grid").style.display=slots[sel]==null?"":"none";
+  $("grid").style.display=(manual&&slots[sel]==null)?"":"none";
+  $("manualBtn").style.display=manual?"none":"";
   document.querySelectorAll("#grid button").forEach(b=>b.onclick=()=>{
     slots[sel]=+b.dataset.c;const n=slots.findIndex(x=>x==null);sel=n<0?sel:n;render()});
 }
+$("manualBtn").onclick=()=>{manual=true;sel=Math.max(0,slots.findIndex(x=>x==null));render()};
 $("clear").onclick=()=>{slots.fill(null);sel=0;$("out").style.display="none";render()};
 
 // ---- evaluator (7 cards -> score) ----
@@ -260,7 +263,7 @@ async function scan(blob){
     slots.fill(null);const seen=new Set();
     (d.hole||[]).slice(0,2).forEach((t,i)=>{const c=parse(t);if(c!=null&&!seen.has(c)){slots[i]=c;seen.add(c)}});
     (d.board||[]).slice(0,5).forEach((t,i)=>{const c=parse(t);if(c!=null&&!seen.has(c)){slots[2+i]=c;seen.add(c)}});
-    sel=Math.max(0,slots.findIndex(x=>x==null));render();
+    manual=false;sel=Math.max(0,slots.findIndex(x=>x==null));render();
     toast("Verify the cards below, tap any slot to fix it, then Calculate.");
   }catch(err){toast("Couldn't read the photo ("+(err&&err.message||err)+"). Try better light or enter cards manually.")}
 }
