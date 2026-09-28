@@ -3,8 +3,11 @@ export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
   const code = process.env.APP_PASSCODE;
   if (code && req.headers["x-passcode"] !== code) return res.status(401).end();
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY. Add it in Vercel project settings and redeploy." });
+  }
   const image = req.body && req.body.image;
-  if (!image || image.length > 4_000_000) return res.status(400).end();
+  if (!image || image.length > 4_000_000) return res.status(400).json({ error: "Missing or too-large image." });
   try {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -25,11 +28,20 @@ export default async function handler(req, res) {
         }],
       }),
     });
+    if (!r.ok) {
+      const errBody = await r.text();
+      console.error("Anthropic API error", r.status, errBody);
+      return res.status(502).json({ error: `Anthropic API returned ${r.status}`, detail: errBody.slice(0, 300) });
+    }
     const j = await r.json();
     const text = (j.content || []).map(c => c.text || "").join("");
     const m = text.match(/\{[\s\S]*\}/);
-    res.status(200).json(m ? JSON.parse(m[0]) : { hole: [], board: [] });
+    if (!m) {
+      return res.status(502).json({ error: "Model reply had no parseable JSON.", detail: text.slice(0, 300) });
+    }
+    res.status(200).json(JSON.parse(m[0]));
   } catch (e) {
-    res.status(500).json({ error: "scan failed" });
+    console.error("scan handler exception", e);
+    res.status(500).json({ error: "scan failed", detail: String(e) });
   }
 }
