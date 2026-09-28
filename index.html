@@ -48,17 +48,17 @@ input[type=number]{width:100%;font:inherit;padding:10px;border-radius:8px;border
 </head>
 <body>
 <main>
-<h1>â  Poker Odds Coach</h1>
+<h1>♠ Poker Odds Coach</h1>
 
 <section>
 <h2>Scan the table</h2>
 <div class="row">
-<label class="btn" for="cam" id="scanBtn">ð· Take photo</label>
+<label class="btn" for="cam" id="scanBtn">📷 Take photo</label>
 <input id="cam" type="file" accept="image/*" capture="environment" hidden>
 <img id="prev" alt="">
 <span class="mute">Photo your hand and the board together, then confirm below.</span>
 </div>
-<div class="row" style="margin-top:8px"><button class="sec" id="live">ð¥ Live camera</button><input id="code" type="password" placeholder="Access code" style="flex:1;min-width:120px;font:inherit;padding:10px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--ink)"></div>
+<div class="row" style="margin-top:8px"><button class="sec" id="live">🎥 Live camera</button><input id="code" type="password" placeholder="Access code" style="flex:1;min-width:120px;font:inherit;padding:10px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--ink)"></div>
 <video id="vid" playsinline muted style="display:none;width:100%;border-radius:8px;margin-top:8px"></video>
 <button id="snap" style="display:none;margin-top:8px;width:100%">Capture &amp; read cards</button>
 <div id="msg"></div>
@@ -97,7 +97,7 @@ input[type=number]{width:100%;font:inherit;padding:10px;border-radius:8px;border
 </main>
 
 <script>
-const R="23456789TJQKA",S="cdhs",SYM={c:"â£",d:"â¦",h:"â¥",s:"â "};
+const R="23456789TJQKA",S="cdhs",SYM={c:"♣",d:"♦",h:"♥",s:"♠"};
 // slots: 0-1 hole, 2-6 board. values: card int (rank*4+suit) or null
 const slots=Array(7).fill(null);let sel=0;
 const $=id=>document.getElementById(id);
@@ -161,7 +161,7 @@ $("go").onclick=()=>{
   if(hole.length<2){toast("Pick both of your hole cards first.");return}
   if(![0,3,4,5].includes(board.length)){toast("Board should have 0, 3, 4 or 5 cards.");return}
   const opps=Math.min(9,Math.max(1,+$("opp").value||1)),pot=+$("pot").value||0,call=+$("call").value||0;
-  $("go").disabled=true;$("go").textContent="Calculatingâ¦";
+  $("go").disabled=true;$("go").textContent="Calculating…";
   setTimeout(()=>{
     const sim=simulate(hole,board,opps,board.length===0?12000:20000);
     const eq=sim.eq;
@@ -177,7 +177,7 @@ $("go").onclick=()=>{
         }).join("");
         betterHtml=`<div style="font-weight:700;margin-bottom:2px">Better hands possible (chance an opponent has it):</div>${rows}`;
       }else{
-        betterHtml="You already have the top hand category â nothing beats "+CAT[madeIdx]+".";
+        betterHtml="You already have the top hand category — nothing beats "+CAT[madeIdx]+".";
       }
     }
     if(call>0){
@@ -211,13 +211,13 @@ function shrink(blob){return createImageBitmap(blob).then(bm=>{const s=Math.min(
   const c=document.createElement("canvas");c.width=bm.width*s;c.height=bm.height*s;c.getContext("2d").drawImage(bm,0,0,c.width,c.height);
   return c.toDataURL("image/jpeg",.85).split(",")[1]})}
 async function scan(blob){
-  toast("Reading cardsâ¦");
+  toast("Reading cards…");
   try{
     const image=await shrink(blob);
     const r=await fetch("/api/scan",{method:"POST",headers:{"Content-Type":"application/json","x-passcode":$("code").value},body:JSON.stringify({image})});
     if(r.status===401){toast("Wrong access code.");return}
     const d=await r.json();
-    if(!r.ok){toast("Scan error: "+(d.error||r.status)+(d.detail?" â "+d.detail:""));return}
+    if(!r.ok){toast("Scan error: "+(d.error||r.status)+(d.detail?" — "+d.detail:""));return}
     slots.fill(null);const seen=new Set();
     (d.hole||[]).slice(0,2).forEach((t,i)=>{const c=parse(t);if(c!=null&&!seen.has(c)){slots[i]=c;seen.add(c)}});
     (d.board||[]).slice(0,5).forEach((t,i)=>{const c=parse(t);if(c!=null&&!seen.has(c)){slots[2+i]=c;seen.add(c)}});
