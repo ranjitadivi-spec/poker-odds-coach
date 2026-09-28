@@ -193,14 +193,14 @@ async function scan(blob){
     const image=await shrink(blob);
     const r=await fetch("/api/scan",{method:"POST",headers:{"Content-Type":"application/json","x-passcode":$("code").value},body:JSON.stringify({image})});
     if(r.status===401){toast("Wrong access code.");return}
-    if(!r.ok)throw 0;
     const d=await r.json();
+    if(!r.ok){toast("Scan error: "+(d.error||r.status)+(d.detail?" — "+d.detail:""));return}
     slots.fill(null);const seen=new Set();
     (d.hole||[]).slice(0,2).forEach((t,i)=>{const c=parse(t);if(c!=null&&!seen.has(c)){slots[i]=c;seen.add(c)}});
     (d.board||[]).slice(0,5).forEach((t,i)=>{const c=parse(t);if(c!=null&&!seen.has(c)){slots[2+i]=c;seen.add(c)}});
     sel=Math.max(0,slots.findIndex(x=>x==null));render();
     toast("Verify the cards below, tap any slot to fix it, then Calculate.");
-  }catch(err){toast("Couldn't read the photo. Try better light or enter cards manually.")}
+  }catch(err){toast("Couldn't read the photo ("+(err&&err.message||err)+"). Try better light or enter cards manually.")}
 }
 $("cam").onchange=e=>{const f=e.target.files[0];if(!f)return;const p=$("prev");p.src=URL.createObjectURL(f);p.style.display="block";scan(f);e.target.value=""};
 let stream=null;
