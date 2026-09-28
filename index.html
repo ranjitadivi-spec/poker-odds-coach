@@ -44,6 +44,9 @@ input[type=number]{width:100%;font:inherit;padding:10px;border-radius:8px;border
 .blist{display:flex;justify-content:space-between;gap:8px;padding:4px 0;border-bottom:1px solid var(--line)}
 .blist:last-child{border-bottom:none}
 .blist b{font-weight:700;color:var(--ink)}
+.oddsTable{width:100%;border-collapse:collapse;font-size:13px;margin-top:4px}
+.oddsTable th,.oddsTable td{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left}
+.oddsTable th:last-child,.oddsTable td:last-child,.oddsTable th:nth-child(2),.oddsTable td:nth-child(2){text-align:right}
 </style>
 </head>
 <body>
@@ -91,6 +94,7 @@ input[type=number]{width:100%;font:inherit;padding:10px;border-radius:8px;border
 <div class="rec" id="rec"></div>
 <div class="mute" id="why"></div>
 <div class="mute" id="better" style="margin-top:6px"></div>
+<div class="mute" id="odds"></div>
 </section>
 
 <p class="mute">Estimates use random-opponent simulation and don't read opponents' tendencies. Check that your card room or game allows device use before relying on this.</p>
@@ -113,6 +117,7 @@ function render(){
   let g="";
   for(let s=3;s>=0;s--)for(let r=12;r>=0;r--){const c=r*4+s;g+=`<button class="${"dh".includes(S[s])||S[s]==="h"?"r":""}" data-c="${c}" ${slots.includes(c)?"disabled":""}>${R[r]}${SYM[S[s]]}</button>`}
   $("grid").innerHTML=g;
+  $("grid").style.display=slots[sel]==null?"":"none";
   document.querySelectorAll("#grid button").forEach(b=>b.onclick=()=>{
     slots[sel]=+b.dataset.c;const n=slots.findIndex(x=>x==null);sel=n<0?sel:n;render()});
 }
@@ -156,6 +161,33 @@ function simulate(hole,board,opps,N){
   return {eq:(win+tie)/N,oppCat,N};
 }
 
+function outsAnalysis(hole,board){
+  const used=new Set([...hole,...board]);const deck=[];for(let c=0;c<52;c++)if(!used.has(c))deck.push(c);
+  const res={};
+  if(board.length===3){
+    const turnC=new Array(9).fill(0);
+    for(const t of deck){const cat=Math.floor(ev(hole.concat(board).concat([t]))/HANDK);turnC[cat]++}
+    res.turn={counts:turnC,total:deck.length};
+    const riverC=new Array(9).fill(0);let tot=0;
+    for(let i=0;i<deck.length;i++)for(let j=i+1;j<deck.length;j++){const cat=Math.floor(ev(hole.concat(board).concat([deck[i],deck[j]]))/HANDK);riverC[cat]++;tot++}
+    res.river={counts:riverC,total:tot};
+  }else if(board.length===4){
+    const riverC=new Array(9).fill(0);
+    for(const r of deck){const cat=Math.floor(ev(hole.concat(board).concat([r]))/HANDK);riverC[cat]++}
+    res.river={counts:riverC,total:deck.length};
+  }
+  return res;
+}
+function oddsTableHtml(title,counts,total){
+  let rows="";
+  for(let i=8;i>=0;i--){
+    if(!counts[i])continue;
+    const pct=counts[i]/total*100;
+    rows+=`<tr><td>${CAT[i]}</td><td>${counts[i]}</td><td>${pct<0.1?"<0.1":pct.toFixed(1)}%</td></tr>`;
+  }
+  return `<div style="font-weight:700;margin-top:10px;margin-bottom:2px">${title}</div><table class="oddsTable"><thead><tr><th>Resulting hand</th><th>Outs</th><th>%</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+
 $("go").onclick=()=>{
   const hole=slots.slice(0,2).filter(x=>x!=null),board=slots.slice(2).filter(x=>x!=null);
   if(hole.length<2){toast("Pick both of your hole cards first.");return}
@@ -166,7 +198,7 @@ $("go").onclick=()=>{
     const sim=simulate(hole,board,opps,board.length===0?12000:20000);
     const eq=sim.eq;
     const fair=1/(opps+1);let rec,why;
-    let madeIdx=-1,betterHtml="";
+    let madeIdx=-1,betterHtml="",oddsHtml="";
     if(board.length>=3){
       madeIdx=Math.floor(ev(hole.concat(board))/371293);
       const betterIdx=[];for(let i=8;i>madeIdx;i--)betterIdx.push(i);
@@ -178,6 +210,12 @@ $("go").onclick=()=>{
         betterHtml=`<div style="font-weight:700;margin-bottom:2px">Better hands possible (chance an opponent has it):</div>${rows}`;
       }else{
         betterHtml="You already have the top hand category — nothing beats "+CAT[madeIdx]+".";
+      }
+      const oa=outsAnalysis(hole,board);
+      if(oa.turn||oa.river){
+        oddsHtml=`<div>Your current hand is ${CAT[madeIdx]}. Here's exactly how it can improve as the remaining board cards come:</div>`;
+        if(oa.turn)oddsHtml+=oddsTableHtml(`Turn card (${oa.turn.total} cards left)`,oa.turn.counts,oa.turn.total);
+        if(oa.river)oddsHtml+=oddsTableHtml(board.length===3?`By the river (both cards to come, ${oa.river.total} combinations)`:`River card (${oa.river.total} cards left)`,oa.river.counts,oa.river.total);
       }
     }
     if(call>0){
@@ -196,6 +234,7 @@ $("go").onclick=()=>{
     $("det").textContent=`Hand: ${hole.map(name).join(" ")}${board.length?" | Board: "+board.map(name).join(" "):" (preflop)"} vs ${opps} random opponent${opps>1?"s":""}.`;
     $("rec").className="rec "+rec;$("rec").textContent=rec;$("why").textContent=why;
     $("better").innerHTML=betterHtml;
+    $("odds").innerHTML=oddsHtml;
     if(madeIdx>=0)$("det").textContent+=` Your hand: ${CAT[madeIdx]}.`;
     $("go").disabled=false;$("go").textContent="Calculate";
     $("out").scrollIntoView({behavior:"smooth"});
