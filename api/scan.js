@@ -29,7 +29,6 @@ export default async function handler(req, res) {
               { type: "text", text: `This photo shows playing cards at a poker table. Identify the player's ${hc} hole cards (held in hand or closest to the camera) and the community cards on the table (0, 3, 4 or 5). Use two-character codes: rank (2-9,T,J,Q,K,A) then suit (c,d,h,s), e.g. "As", "Td". Omit any card you are unsure of. Reply with ONLY a single JSON object and nothing else — no explanation, no markdown code fences: {"hole":[...],"board":[...]}` },
             ],
           },
-          { role: "assistant", content: "{" },
         ],
       }),
     });
@@ -39,7 +38,7 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: `Anthropic API returned ${r.status}`, detail: errBody.slice(0, 300) });
     }
     const j = await r.json();
-    const text = "{" + (j.content || []).map(c => c.text || "").join("");
+    const text = (j.content || []).map(c => c.text || "").join("");
     const m = text.match(/\{[\s\S]*\}/);
     if (!m) {
       return res.status(502).json({ error: "Model reply had no parseable JSON.", detail: text.slice(0, 300) });
