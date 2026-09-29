@@ -194,13 +194,16 @@ export default async function handler(req, res) {
 
     if (call > 0) {
       const need = call / (pot + call);
-      why = `You need ${(need * 100).toFixed(0)}% equity to break even calling ${call} into ${pot}. You have about ${(eq * 100).toFixed(0)}%.`;
+      why = `Equity needed = call ÷ (pot + call) = ${call} ÷ (${pot} + ${call}) = ${(need * 100).toFixed(1)}%. That's the break-even point: call this often (in equivalent spots) and you win back exactly what you put in. Simulation gives you about ${(eq * 100).toFixed(0)}% equity here, so `;
       if (eq > need + 0.25 && eq > 0.6) rec = "RAISE"; else if (eq >= need + 0.03) rec = "CALL"; else if (eq >= need - 0.03 && board.length < 5) rec = "CALL"; else rec = "FOLD";
+      why += eq >= need ? `you're above the ${(need * 100).toFixed(1)}% you need — calling profits on average.` : `you're below the ${(need * 100).toFixed(1)}% you need — calling loses on average.`;
       if (rec === "CALL" && eq < need + 0.03) why += " It's marginal; drawing hands with future bets can justify it.";
     } else {
-      if (eq > Math.max(0.6, fair + 0.2)) { rec = "BET"; why = `Well ahead of an even share (${(fair * 100).toFixed(0)}%). Bet for value, roughly half to two-thirds of the pot.` }
-      else if (eq > fair + 0.08 && board.length < 5) { rec = "BET"; why = `Ahead of an even share (${(fair * 100).toFixed(0)}%). A modest bet builds the pot and denies free cards.` }
-      else { rec = "CHECK"; why = `Not clearly ahead of an even share (${(fair * 100).toFixed(0)}%). Check and see the next card cheaply.` }
+      const fairPct = (fair * 100).toFixed(1);
+      const fairCalc = `an even share = 1 ÷ (opponents + 1) = 1 ÷ (${opps} + 1) = ${fairPct}%`;
+      if (eq > Math.max(0.6, fair + 0.2)) { rec = "BET"; why = `Well ahead of ${fairCalc}. Bet for value, roughly half to two-thirds of the pot.` }
+      else if (eq > fair + 0.08 && board.length < 5) { rec = "BET"; why = `Ahead of ${fairCalc}. A modest bet builds the pot and denies free cards.` }
+      else { rec = "CHECK"; why = `Not clearly ahead of ${fairCalc}. Check and see the next card cheaply.` }
     }
 
     res.status(200).json({
