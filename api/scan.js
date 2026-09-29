@@ -20,14 +20,17 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: process.env.MODEL || "claude-sonnet-5",
-        max_tokens: 300,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } },
-            { type: "text", text: `This photo shows playing cards at a poker table. Identify the player's ${hc} hole cards (held in hand or closest to the camera) and the community cards on the table (0, 3, 4 or 5). Use two-character codes: rank (2-9,T,J,Q,K,A) then suit (c,d,h,s), e.g. "As", "Td". Omit any card you are unsure of. Reply ONLY with JSON: {"hole":[...],"board":[...]}` },
-          ],
-        }],
+        max_tokens: 400,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } },
+              { type: "text", text: `This photo shows playing cards at a poker table. Identify the player's ${hc} hole cards (held in hand or closest to the camera) and the community cards on the table (0, 3, 4 or 5). Use two-character codes: rank (2-9,T,J,Q,K,A) then suit (c,d,h,s), e.g. "As", "Td". Omit any card you are unsure of. Reply with ONLY a single JSON object and nothing else — no explanation, no markdown code fences: {"hole":[...],"board":[...]}` },
+            ],
+          },
+          { role: "assistant", content: "{" },
+        ],
       }),
     });
     if (!r.ok) {
@@ -36,12 +39,16 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: `Anthropic API returned ${r.status}`, detail: errBody.slice(0, 300) });
     }
     const j = await r.json();
-    const text = (j.content || []).map(c => c.text || "").join("");
+    const text = "{" + (j.content || []).map(c => c.text || "").join("");
     const m = text.match(/\{[\s\S]*\}/);
     if (!m) {
       return res.status(502).json({ error: "Model reply had no parseable JSON.", detail: text.slice(0, 300) });
     }
-    res.status(200).json(JSON.parse(m[0]));
+    try {
+      res.status(200).json(JSON.parse(m[0]));
+    } catch (parseErr) {
+      res.status(502).json({ error: "Model reply had malformed JSON.", detail: text.slice(0, 300) });
+    }
   } catch (e) {
     console.error("scan handler exception", e);
     res.status(500).json({ error: "scan failed", detail: String(e) });
