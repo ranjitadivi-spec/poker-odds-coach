@@ -290,7 +290,12 @@ function toast(t){$("msg").textContent=t}
 // ---- photo scan via server function ----
 const K="pc_code";try{$("code").value=localStorage.getItem(K)||""}catch(e){}
 $("code").onchange=()=>{try{localStorage.setItem(K,$("code").value)}catch(e){}};
-function shrink(blob){return createImageBitmap(blob).then(bm=>{const s=Math.min(1,1600/Math.max(bm.width,bm.height));
+function shrink(blob){
+  // Omaha shows 4 hole cards in the space Hold'em uses for 2, so each card
+  // (and its suit glyph) is roughly half the size on screen - use a higher
+  // resolution cap for Omaha so suits stay legible.
+  const maxDim=game==="omaha"?2200:1600;
+  return createImageBitmap(blob).then(bm=>{const s=Math.min(1,maxDim/Math.max(bm.width,bm.height));
   const c=document.createElement("canvas");c.width=bm.width*s;c.height=bm.height*s;c.getContext("2d").drawImage(bm,0,0,c.width,c.height);
   return c.toDataURL("image/jpeg",.92).split(",")[1]})}
 async function scan(blob){
