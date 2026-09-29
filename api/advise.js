@@ -105,9 +105,9 @@ export default async function handler(req, res) {
   }
   const image = req.body && req.body.image;
   if (!image || image.length > 4_000_000) return res.status(400).json({ error: "Missing or too-large image." });
-  const opps = Math.min(9, Math.max(1, parseInt(req.body.opponents, 10) || 1));
-  const pot = Number(req.body.pot) || 0;
-  const call = Number(req.body.call) || 0;
+  const fallbackOpps = Math.min(9, Math.max(1, parseInt(req.body.opponents, 10) || 1));
+  const fallbackPot = Number(req.body.pot) || 0;
+  const fallbackCall = Number(req.body.call) || 0;
   const game = req.body.game === "omaha" ? "omaha" : "holdem";
   const hc = holeCountFor(game);
 
@@ -126,7 +126,7 @@ export default async function handler(req, res) {
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } },
-            { type: "text", text: `This photo shows playing cards at a poker table. Identify the player's ${hc} hole cards (held in hand or closest to the camera) and the community cards on the table (0, 3, 4 or 5). Use two-character codes: rank (2-9,T,J,Q,K,A) then suit (c,d,h,s), e.g. "As", "Td". Omit any card you are unsure of. Reply ONLY with JSON: {"hole":[...],"board":[...]}` },
+            { type: "text", text: `This photo shows a poker table (an online poker app screen). Identify: (1) the player's ${hc} hole cards (held in hand or closest to the camera); (2) the community cards on the table (0, 3, 4 or 5). Use two-character codes: rank (2-9,T,J,Q,K,A) then suit (c,d,h,s), e.g. "As", "Td". Omit any card you are unsure of. Also read from the on-screen UI, if clearly visible: (3) "opponents": the number of other players still active in this hand (still seated with cards, not folded/sitting out), as a plain integer, or null if you can't tell; (4) "pot": the total pot size shown on screen, as a plain number with no currency symbols or commas (e.g. 45.5, not "$45.50"), or null if not visible; (5) "call": the amount currently needed to call / the outstanding bet facing the player, as a plain number, or null if there is no bet to call right now or it isn't legible. Reply ONLY with JSON: {"hole":[...],"board":[...],"opponents":<int or null>,"pot":<number or null>,"call":<number or null>}` },
           ],
         }],
       }),
@@ -155,6 +155,18 @@ export default async function handler(req, res) {
     if (hole.length < hc) {
       return res.status(422).json({ error: `Couldn't clearly read all ${hc} hole cards.`, hole: hole.map(name), board: board.map(name) });
     }
+
+    const rawOpp = raw.opponents != null ? Number(raw.opponents) : NaN;
+    const opponentsDetected = Number.isFinite(rawOpp) && rawOpp > 0;
+    const opps = opponentsDetected ? Math.min(9, Math.max(1, Math.round(rawOpp))) : fallbackOpps;
+
+    const rawPot = raw.pot != null ? Number(raw.pot) : NaN;
+    const potDetected = Number.isFinite(rawPot) && rawPot >= 0;
+    const pot = potDetected ? rawPot : fallbackPot;
+
+    const rawCall = raw.call != null ? Number(raw.call) : NaN;
+    const callDetected = Number.isFinite(rawCall) && rawCall >= 0;
+    const call = callDetected ? rawCall : fallbackCall;
 
     const N = board.length === 0 ? (game === "omaha" ? 6000 : 12000) : (game === "omaha" ? 10000 : 20000);
     const sim = simulate(hole, board, opps, N, game);
@@ -189,6 +201,11 @@ export default async function handler(req, res) {
       board: board.map(name),
       game,
       opponents: opps,
+      opponentsDetected,
+      pot,
+      potDetected,
+      call,
+      callDetected,
       equity: Math.round(eq * 1000) / 10,
       recommendation: rec,
       why,
