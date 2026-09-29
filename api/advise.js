@@ -35,35 +35,53 @@ function ev(cs) {
 const CAT = ["High card", "Pair", "Two pair", "Three of a kind", "Straight", "Flush", "Full house", "Four of a kind", "Straight flush"];
 const HANDK = 371293;
 
-function simulate(hole, board, opps, N) {
+const HOLE_PAIRS_4 = [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]];
+function combos3(arr) { const n = arr.length, res = []; for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) for (let k = j + 1; k < n; k++) res.push([arr[i], arr[j], arr[k]]); return res }
+function evOmaha(hole, board) {
+  let best = -1;
+  const triples = combos3(board);
+  for (const [i, j] of HOLE_PAIRS_4) {
+    const pair = [hole[i], hole[j]];
+    for (const t of triples) { const s = ev(pair.concat(t)); if (s > best) best = s }
+  }
+  return best;
+}
+function bestScore(hole, board, game) {
+  if (game === "omaha") { if (board.length < 3) return -1; return evOmaha(hole, board) }
+  return ev(hole.concat(board));
+}
+function holeCountFor(game) { return game === "omaha" ? 4 : 2 }
+
+function simulate(hole, board, opps, N, game) {
+  const hc = holeCountFor(game);
   const used = new Set([...hole, ...board]); const deck = []; for (let c = 0; c < 52; c++) if (!used.has(c)) deck.push(c);
   const need = 5 - board.length, dl = deck.length; let win = 0, tie = 0, lose = 0;
   const oppCat = new Array(9).fill(0);
   for (let n = 0; n < N; n++) {
-    const k = need + opps * 2;
+    const k = need + opps * hc;
     for (let i = 0; i < k; i++) { const j = i + Math.floor(Math.random() * (dl - i)); const x = deck[i]; deck[i] = deck[j]; deck[j] = x }
     const full = board.concat(deck.slice(0, need));
-    const me = ev(hole.concat(full)); let best = -1, cnt = 0;
-    for (let o = 0; o < opps; o++) { const a = deck[need + o * 2], b = deck[need + o * 2 + 1]; const s = ev([a, b].concat(full)); if (s > best) { best = s; cnt = 1 } else if (s === best) cnt++ }
+    const me = bestScore(hole, full, game); let best = -1, cnt = 0;
+    for (let o = 0; o < opps; o++) { const oh = deck.slice(need + o * hc, need + o * hc + hc); const s = bestScore(oh, full, game); if (s > best) { best = s; cnt = 1 } else if (s === best) cnt++ }
     if (best >= 0) oppCat[Math.floor(best / HANDK)]++;
     if (me > best) win++; else if (me === best) tie += 1 / (cnt + 1); else lose++;
   }
   return { eq: (win + tie) / N, oppCat, N };
 }
 
-function outsAnalysis(hole, board) {
+function outsAnalysis(hole, board, game) {
   const used = new Set([...hole, ...board]); const deck = []; for (let c = 0; c < 52; c++) if (!used.has(c)) deck.push(c);
   const res = {};
   if (board.length === 3) {
     const turnC = new Array(9).fill(0);
-    for (const t of deck) { const cat = Math.floor(ev(hole.concat(board).concat([t])) / HANDK); turnC[cat]++ }
+    for (const t of deck) { const cat = Math.floor(bestScore(hole, board.concat([t]), game) / HANDK); turnC[cat]++ }
     res.turn = { counts: turnC, total: deck.length };
     const riverC = new Array(9).fill(0); let tot = 0;
-    for (let i = 0; i < deck.length; i++) for (let j = i + 1; j < deck.length; j++) { const cat = Math.floor(ev(hole.concat(board).concat([deck[i], deck[j]])) / HANDK); riverC[cat]++; tot++ }
+    for (let i = 0; i < deck.length; i++) for (let j = i + 1; j < deck.length; j++) { const cat = Math.floor(bestScore(hole, board.concat([deck[i], deck[j]]), game) / HANDK); riverC[cat]++; tot++ }
     res.river = { counts: riverC, total: tot };
   } else if (board.length === 4) {
     const riverC = new Array(9).fill(0);
-    for (const r of deck) { const cat = Math.floor(ev(hole.concat(board).concat([r])) / HANDK); riverC[cat]++ }
+    for (const r of deck) { const cat = Math.floor(bestScore(hole, board.concat([r]), game) / HANDK); riverC[cat]++ }
     res.river = { counts: riverC, total: deck.length };
   }
   return res;
@@ -90,6 +108,8 @@ export default async function handler(req, res) {
   const opps = Math.min(9, Math.max(1, parseInt(req.body.opponents, 10) || 1));
   const pot = Number(req.body.pot) || 0;
   const call = Number(req.body.call) || 0;
+  const game = req.body.game === "omaha" ? "omaha" : "holdem";
+  const hc = holeCountFor(game);
 
   try {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -106,7 +126,7 @@ export default async function handler(req, res) {
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } },
-            { type: "text", text: 'This photo shows playing cards at a poker table. Identify the player\'s two hole cards (held in hand or closest to the camera) and the community cards on the table (0, 3, 4 or 5). Use two-character codes: rank (2-9,T,J,Q,K,A) then suit (c,d,h,s), e.g. "As", "Td". Omit any card you are unsure of. Reply ONLY with JSON: {"hole":[...],"board":[...]}' },
+            { type: "text", text: `This photo shows playing cards at a poker table. Identify the player's ${hc} hole cards (held in hand or closest to the camera) and the community cards on the table (0, 3, 4 or 5). Use two-character codes: rank (2-9,T,J,Q,K,A) then suit (c,d,h,s), e.g. "As", "Td". Omit any card you are unsure of. Reply ONLY with JSON: {"hole":[...],"board":[...]}` },
           ],
         }],
       }),
@@ -124,7 +144,7 @@ export default async function handler(req, res) {
 
     const seen = new Set();
     const hole = [];
-    (raw.hole || []).slice(0, 2).forEach(t => { const c = parse(t); if (c != null && !seen.has(c)) { hole.push(c); seen.add(c) } });
+    (raw.hole || []).slice(0, hc).forEach(t => { const c = parse(t); if (c != null && !seen.has(c)) { hole.push(c); seen.add(c) } });
     const boardAll = [];
     (raw.board || []).slice(0, 5).forEach(t => { const c = parse(t); if (c != null && !seen.has(c)) { boardAll.push(c); seen.add(c) } });
     const allowedLens = [0, 3, 4, 5];
@@ -132,22 +152,23 @@ export default async function handler(req, res) {
     for (const l of allowedLens) if (boardAll.length >= l) boardLen = l;
     const board = boardAll.slice(0, boardLen);
 
-    if (hole.length < 2) {
-      return res.status(422).json({ error: "Couldn't clearly read both hole cards.", hole: hole.map(name), board: board.map(name) });
+    if (hole.length < hc) {
+      return res.status(422).json({ error: `Couldn't clearly read all ${hc} hole cards.`, hole: hole.map(name), board: board.map(name) });
     }
 
-    const sim = simulate(hole, board, opps, board.length === 0 ? 12000 : 20000);
+    const N = board.length === 0 ? (game === "omaha" ? 6000 : 12000) : (game === "omaha" ? 10000 : 20000);
+    const sim = simulate(hole, board, opps, N, game);
     const eq = sim.eq;
     const fair = 1 / (opps + 1);
     let rec, why;
     let madeHand = null, better = [], turnTable = null, riverTable = null;
 
     if (board.length >= 3) {
-      const madeIdx = Math.floor(ev(hole.concat(board)) / HANDK);
+      const madeIdx = Math.floor(bestScore(hole, board, game) / HANDK);
       madeHand = CAT[madeIdx];
       const betterIdx = []; for (let i = 8; i > madeIdx; i--) betterIdx.push(i);
       better = betterIdx.map(i => ({ hand: CAT[i], pct: Math.round((sim.oppCat[i] / sim.N * 100) * 10) / 10 }));
-      const oa = outsAnalysis(hole, board);
+      const oa = outsAnalysis(hole, board, game);
       if (oa.turn) turnTable = { total: oa.turn.total, rows: tableRows(oa.turn.counts, oa.turn.total) };
       if (oa.river) riverTable = { total: oa.river.total, cumulative: board.length === 3, rows: tableRows(oa.river.counts, oa.river.total) };
     }
@@ -166,6 +187,7 @@ export default async function handler(req, res) {
     res.status(200).json({
       hole: hole.map(name),
       board: board.map(name),
+      game,
       opponents: opps,
       equity: Math.round(eq * 1000) / 10,
       recommendation: rec,
