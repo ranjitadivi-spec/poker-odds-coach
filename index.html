@@ -47,11 +47,20 @@ input[type=number]{width:100%;font:inherit;padding:10px;border-radius:8px;border
 .oddsTable{width:100%;border-collapse:collapse;font-size:13px;margin-top:4px}
 .oddsTable th,.oddsTable td{padding:4px 6px;border-bottom:1px solid var(--line);text-align:left}
 .oddsTable th:last-child,.oddsTable td:last-child,.oddsTable th:nth-child(2),.oddsTable td:nth-child(2){text-align:right}
+.sec.active{background:var(--acc);color:#1a1400;border-color:var(--acc)}
 </style>
 </head>
 <body>
 <main>
 <h1>♠ Poker Odds Coach</h1>
+
+<section>
+<h2>Game</h2>
+<div class="row" id="gameRow">
+<button class="sec active" data-game="holdem">Hold'em</button>
+<button class="sec" data-game="omaha">Omaha (4 cards)</button>
+</div>
+</section>
 
 <section>
 <h2>Scan the table</h2>
@@ -103,17 +112,21 @@ input[type=number]{width:100%;font:inherit;padding:10px;border-radius:8px;border
 
 <script>
 const R="23456789TJQKA",S="cdhs",SYM={c:"♣",d:"♦",h:"♥",s:"♠"};
-// slots: 0-1 hole, 2-6 board. values: card int (rank*4+suit) or null
-const slots=Array(7).fill(null);let sel=0;let manual=false;
+let game="holdem";
+const holeCount=()=>game==="omaha"?4:2;
+// slots: 0..holeCount-1 hole, then 5 board. values: card int (rank*4+suit) or null
+let slots=Array(holeCount()+5).fill(null);let sel=0;let manual=false;
 const $=id=>document.getElementById(id);
 const name=c=>R[c>>2]+SYM[S[c&3]];
 const isRed=c=>{const s=S[c&3];return s==="d"||s==="h"};
 function parse(t){if(typeof t!=="string"||t.length<2)return null;const r=R.indexOf(t[0].toUpperCase().replace("1","T")),s=S.indexOf(t[t.length-1].toLowerCase());return r<0||s<0?null:r*4+s}
 
 function render(){
+  const hc=holeCount();
   const mk=(i)=>{const c=slots[i];return `<div class="slot${c!=null?" f"+(isRed(c)?" r":""):""}${sel===i?" sel":""}" data-i="${i}">${c!=null?name(c):""}</div>`};
-  $("hole").innerHTML=mk(0)+mk(1);
-  $("board").innerHTML=[2,3,4].map(mk).join("")+'<div class="gap"></div>'+mk(5)+'<div class="gap"></div>'+mk(6);
+  $("hole").innerHTML=Array.from({length:hc},(_,i)=>mk(i)).join("");
+  const b=hc;
+  $("board").innerHTML=[b,b+1,b+2].map(mk).join("")+'<div class="gap"></div>'+mk(b+3)+'<div class="gap"></div>'+mk(b+4);
   document.querySelectorAll(".slot").forEach(e=>e.onclick=()=>{const i=+e.dataset.i;if(sel===i&&slots[i]!=null)slots[i]=null;sel=i;manual=true;render()});
   let g="";
   for(let s=3;s>=0;s--)for(let r=12;r>=0;r--){const c=r*4+s;g+=`<button class="${"dh".includes(S[s])||S[s]==="h"?"r":""}" data-c="${c}" ${slots.includes(c)?"disabled":""}>${R[r]}${SYM[S[s]]}</button>`}
@@ -125,6 +138,12 @@ function render(){
 }
 $("manualBtn").onclick=()=>{manual=true;sel=Math.max(0,slots.findIndex(x=>x==null));render()};
 $("clear").onclick=()=>{slots.fill(null);sel=0;$("out").style.display="none";render()};
+document.querySelectorAll("#gameRow button").forEach(b=>b.onclick=()=>{
+  if(b.dataset.game===game)return;
+  game=b.dataset.game;
+  document.querySelectorAll("#gameRow button").forEach(x=>x.classList.toggle("active",x===b));
+  slots=Array(holeCount()+5).fill(null);sel=0;manual=false;$("out").style.display="none";render();
+});
 
 // ---- evaluator (7 cards -> score) ----
 function st(m){for(let h=12;h>=4;h--)if(((m>>(h-4))&31)===31)return h;return (m&0x100F)===0x100F?3:-1}
@@ -148,35 +167,52 @@ function ev(cs){
 const CAT=["High card","Pair","Two pair","Three of a kind","Straight","Flush","Full house","Four of a kind","Straight flush"];
 const HANDK=371293;
 
-function simulate(hole,board,opps,N){
+const HOLE_PAIRS_4=[[0,1],[0,2],[0,3],[1,2],[1,3],[2,3]];
+function combos3(arr){const n=arr.length,res=[];for(let i=0;i<n;i++)for(let j=i+1;j<n;j++)for(let k=j+1;k<n;k++)res.push([arr[i],arr[j],arr[k]]);return res}
+function evOmaha(hole,board){
+  let best=-1;
+  const triples=combos3(board);
+  for(const [i,j] of HOLE_PAIRS_4){
+    const pair=[hole[i],hole[j]];
+    for(const t of triples){const s=ev(pair.concat(t));if(s>best)best=s}
+  }
+  return best;
+}
+function bestScore(hole,board,game){
+  if(game==="omaha"){ if(board.length<3) return -1; return evOmaha(hole,board) }
+  return ev(hole.concat(board));
+}
+
+function simulate(hole,board,opps,N,game){
+  const hc=holeCount();
   const used=new Set([...hole,...board]);const deck=[];for(let c=0;c<52;c++)if(!used.has(c))deck.push(c);
   const need=5-board.length,dl=deck.length;let win=0,tie=0,lose=0;
   const oppCat=new Array(9).fill(0);
   for(let n=0;n<N;n++){
-    const k=need+opps*2;
+    const k=need+opps*hc;
     for(let i=0;i<k;i++){const j=i+Math.floor(Math.random()*(dl-i));const x=deck[i];deck[i]=deck[j];deck[j]=x}
     const full=board.concat(deck.slice(0,need));
-    const me=ev(hole.concat(full));let best=-1,cnt=0;
-    for(let o=0;o<opps;o++){const a=deck[need+o*2],b=deck[need+o*2+1];const s=ev([a,b].concat(full));if(s>best){best=s;cnt=1}else if(s===best)cnt++}
+    const me=bestScore(hole,full,game);let best=-1,cnt=0;
+    for(let o=0;o<opps;o++){const oh=deck.slice(need+o*hc,need+o*hc+hc);const s=bestScore(oh,full,game);if(s>best){best=s;cnt=1}else if(s===best)cnt++}
     if(best>=0)oppCat[Math.floor(best/HANDK)]++;
     if(me>best)win++;else if(me===best)tie+=1/(cnt+1);else lose++;
   }
   return {eq:(win+tie)/N,oppCat,N};
 }
 
-function outsAnalysis(hole,board){
+function outsAnalysis(hole,board,game){
   const used=new Set([...hole,...board]);const deck=[];for(let c=0;c<52;c++)if(!used.has(c))deck.push(c);
   const res={};
   if(board.length===3){
     const turnC=new Array(9).fill(0);
-    for(const t of deck){const cat=Math.floor(ev(hole.concat(board).concat([t]))/HANDK);turnC[cat]++}
+    for(const t of deck){const cat=Math.floor(bestScore(hole,board.concat([t]),game)/HANDK);turnC[cat]++}
     res.turn={counts:turnC,total:deck.length};
     const riverC=new Array(9).fill(0);let tot=0;
-    for(let i=0;i<deck.length;i++)for(let j=i+1;j<deck.length;j++){const cat=Math.floor(ev(hole.concat(board).concat([deck[i],deck[j]]))/HANDK);riverC[cat]++;tot++}
+    for(let i=0;i<deck.length;i++)for(let j=i+1;j<deck.length;j++){const cat=Math.floor(bestScore(hole,board.concat([deck[i],deck[j]]),game)/HANDK);riverC[cat]++;tot++}
     res.river={counts:riverC,total:tot};
   }else if(board.length===4){
     const riverC=new Array(9).fill(0);
-    for(const r of deck){const cat=Math.floor(ev(hole.concat(board).concat([r]))/HANDK);riverC[cat]++}
+    for(const r of deck){const cat=Math.floor(bestScore(hole,board.concat([r]),game)/HANDK);riverC[cat]++}
     res.river={counts:riverC,total:deck.length};
   }
   return res;
@@ -192,18 +228,20 @@ function oddsTableHtml(title,counts,total){
 }
 
 $("go").onclick=()=>{
-  const hole=slots.slice(0,2).filter(x=>x!=null),board=slots.slice(2).filter(x=>x!=null);
-  if(hole.length<2){toast("Pick both of your hole cards first.");return}
+  const hc=holeCount();
+  const hole=slots.slice(0,hc).filter(x=>x!=null),board=slots.slice(hc).filter(x=>x!=null);
+  if(hole.length<hc){toast(`Pick all ${hc} of your hole cards first.`);return}
   if(![0,3,4,5].includes(board.length)){toast("Board should have 0, 3, 4 or 5 cards.");return}
   const opps=Math.min(9,Math.max(1,+$("opp").value||1)),pot=+$("pot").value||0,call=+$("call").value||0;
   $("go").disabled=true;$("go").textContent="Calculating…";
   setTimeout(()=>{
-    const sim=simulate(hole,board,opps,board.length===0?12000:20000);
+    const N=board.length===0?(game==="omaha"?6000:12000):(game==="omaha"?10000:20000);
+    const sim=simulate(hole,board,opps,N,game);
     const eq=sim.eq;
     const fair=1/(opps+1);let rec,why;
     let madeIdx=-1,betterHtml="",oddsHtml="";
     if(board.length>=3){
-      madeIdx=Math.floor(ev(hole.concat(board))/371293);
+      madeIdx=Math.floor(bestScore(hole,board,game)/371293);
       const betterIdx=[];for(let i=8;i>madeIdx;i--)betterIdx.push(i);
       if(betterIdx.length){
         const rows=betterIdx.map(i=>{
@@ -214,7 +252,7 @@ $("go").onclick=()=>{
       }else{
         betterHtml="You already have the top hand category — nothing beats "+CAT[madeIdx]+".";
       }
-      const oa=outsAnalysis(hole,board);
+      const oa=outsAnalysis(hole,board,game);
       if(oa.turn||oa.river){
         oddsHtml=`<div>Your current hand is ${CAT[madeIdx]}. Here's exactly how it can improve as the remaining board cards come:</div>`;
         if(oa.turn)oddsHtml+=oddsTableHtml(`Turn card (${oa.turn.total} cards left)`,oa.turn.counts,oa.turn.total);
@@ -256,13 +294,14 @@ async function scan(blob){
   toast("Reading cards…");
   try{
     const image=await shrink(blob);
-    const r=await fetch("/api/scan",{method:"POST",headers:{"Content-Type":"application/json","x-passcode":$("code").value},body:JSON.stringify({image})});
+    const r=await fetch("/api/scan",{method:"POST",headers:{"Content-Type":"application/json","x-passcode":$("code").value},body:JSON.stringify({image,game})});
     if(r.status===401){toast("Wrong access code.");return}
     const d=await r.json();
     if(!r.ok){toast("Scan error: "+(d.error||r.status)+(d.detail?" — "+d.detail:""));return}
+    const hc=holeCount();
     slots.fill(null);const seen=new Set();
-    (d.hole||[]).slice(0,2).forEach((t,i)=>{const c=parse(t);if(c!=null&&!seen.has(c)){slots[i]=c;seen.add(c)}});
-    (d.board||[]).slice(0,5).forEach((t,i)=>{const c=parse(t);if(c!=null&&!seen.has(c)){slots[2+i]=c;seen.add(c)}});
+    (d.hole||[]).slice(0,hc).forEach((t,i)=>{const c=parse(t);if(c!=null&&!seen.has(c)){slots[i]=c;seen.add(c)}});
+    (d.board||[]).slice(0,5).forEach((t,i)=>{const c=parse(t);if(c!=null&&!seen.has(c)){slots[hc+i]=c;seen.add(c)}});
     manual=false;sel=Math.max(0,slots.findIndex(x=>x==null));render();
     toast("Verify the cards below, tap any slot to fix it, then Calculate.");
   }catch(err){toast("Couldn't read the photo ("+(err&&err.message||err)+"). Try better light or enter cards manually.")}
