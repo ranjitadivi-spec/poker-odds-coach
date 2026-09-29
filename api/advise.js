@@ -96,20 +96,100 @@ function tableRows(counts, total) {
   return rows;
 }
 
+// Shared by both the vision path and the manual-entry path: runs the
+// simulation and builds the recommendation once hole/board cards and
+// opponents/pot/call are known, however they were obtained.
+function buildVerdict(hole, board, game, opps, opponentsDetected, pot, potDetected, call, callDetected) {
+  const N = board.length === 0 ? (game === "omaha" ? 6000 : 12000) : (game === "omaha" ? 10000 : 20000);
+  const sim = simulate(hole, board, opps, N, game);
+  const eq = sim.eq;
+  const fair = 1 / (opps + 1);
+  let rec, why;
+  let madeHand = null, better = [], turnTable = null, riverTable = null;
+
+  if (board.length >= 3) {
+    const madeIdx = Math.floor(bestScore(hole, board, game) / HANDK);
+    madeHand = CAT[madeIdx];
+    const betterIdx = []; for (let i = 8; i > madeIdx; i--) betterIdx.push(i);
+    better = betterIdx.map(i => ({ hand: CAT[i], pct: Math.round((sim.oppCat[i] / sim.N * 100) * 10) / 10 }));
+    const oa = outsAnalysis(hole, board, game);
+    if (oa.turn) turnTable = { total: oa.turn.total, rows: tableRows(oa.turn.counts, oa.turn.total) };
+    if (oa.river) riverTable = { total: oa.river.total, cumulative: board.length === 3, rows: tableRows(oa.river.counts, oa.river.total) };
+  }
+
+  if (call > 0) {
+    const need = call / (pot + call);
+    why = `Equity needed = call ÷ (pot + call) = ${call} ÷ (${pot} + ${call}) = ${(need * 100).toFixed(1)}%. That's the break-even point: call this often (in equivalent spots) and you win back exactly what you put in. Simulation gives you about ${(eq * 100).toFixed(0)}% equity here, so `;
+    if (eq > need + 0.25 && eq > 0.6) rec = "RAISE"; else if (eq >= need + 0.03) rec = "CALL"; else if (eq >= need - 0.03 && board.length < 5) rec = "CALL"; else rec = "FOLD";
+    why += eq >= need ? `you're above the ${(need * 100).toFixed(1)}% you need — calling profits on average.` : `you're below the ${(need * 100).toFixed(1)}% you need — calling loses on average.`;
+    if (rec === "CALL" && eq < need + 0.03) why += " It's marginal; drawing hands with future bets can justify it.";
+  } else {
+    const fairPct = (fair * 100).toFixed(1);
+    const fairCalc = `an even share = 1 ÷ (opponents + 1) = 1 ÷ (${opps} + 1) = ${fairPct}%`;
+    if (eq > Math.max(0.6, fair + 0.2)) { rec = "BET"; why = `Well ahead of ${fairCalc}. Bet for value, roughly half to two-thirds of the pot.` }
+    else if (eq > fair + 0.08 && board.length < 5) { rec = "BET"; why = `Ahead of ${fairCalc}. A modest bet builds the pot and denies free cards.` }
+    else { rec = "CHECK"; why = `Not clearly ahead of ${fairCalc}. Check and see the next card cheaply.` }
+  }
+
+  return {
+    hole: hole.map(name),
+    board: board.map(name),
+    game,
+    opponents: opps,
+    opponentsDetected,
+    pot,
+    potDetected,
+    call,
+    callDetected,
+    equity: Math.round(eq * 1000) / 10,
+    recommendation: rec,
+    why,
+    madeHand,
+    better,
+    turnTable,
+    riverTable,
+  };
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") return res.status(405).end();
   const code = process.env.APP_PASSCODE;
   if (code && req.headers["x-passcode"] !== code) return res.status(401).end();
-  if (!process.env.ANTHROPIC_API_KEY) {
-    return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY. Add it in Vercel project settings and redeploy." });
-  }
-  const image = req.body && req.body.image;
-  if (!image || image.length > 4_000_000) return res.status(400).json({ error: "Missing or too-large image." });
   const fallbackOpps = Math.min(9, Math.max(1, parseInt(req.body.opponents, 10) || 1));
   const fallbackPot = Number(req.body.pot) || 0;
   const fallbackCall = Number(req.body.call) || 0;
   const game = req.body.game === "omaha" ? "omaha" : "holdem";
   const hc = holeCountFor(game);
+
+  // ---- manual card entry: cards were typed in, so skip the screenshot/vision call entirely ----
+  if (Array.isArray(req.body.manualHole) && req.body.manualHole.length) {
+    try {
+      const seen = new Set();
+      const hole = [];
+      req.body.manualHole.slice(0, hc).forEach(t => { const c = parse(t); if (c != null && !seen.has(c)) { hole.push(c); seen.add(c) } });
+      if (hole.length < hc) {
+        return res.status(422).json({ error: `Enter all ${hc} hole cards clearly, e.g. "${hc === 4 ? "Ah Kd Qc Js" : "Ah Kd"}".` });
+      }
+      const boardRaw = Array.isArray(req.body.manualBoard) ? req.body.manualBoard : [];
+      const board = [];
+      boardRaw.slice(0, 5).forEach(t => { const c = parse(t); if (c != null && !seen.has(c)) { board.push(c); seen.add(c) } });
+      const allowedLens = [0, 3, 4, 5];
+      if (!allowedLens.includes(board.length)) {
+        return res.status(422).json({ error: "Board must have exactly 0, 3, 4 or 5 cards." });
+      }
+      return res.status(200).json(buildVerdict(hole, board, game, fallbackOpps, true, fallbackPot, true, fallbackCall, true));
+    } catch (e) {
+      console.error("manual advise exception", e);
+      return res.status(500).json({ error: "advise failed", detail: String(e) });
+    }
+  }
+
+  // ---- screenshot / vision path ----
+  if (!process.env.ANTHROPIC_API_KEY) {
+    return res.status(500).json({ error: "Server is missing ANTHROPIC_API_KEY. Add it in Vercel project settings and redeploy." });
+  }
+  const image = req.body && req.body.image;
+  if (!image || image.length > 4_000_000) return res.status(400).json({ error: "Missing or too-large image." });
 
   try {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -176,55 +256,7 @@ export default async function handler(req, res) {
     const callDetected = Number.isFinite(rawCall) && rawCall >= 0;
     const call = callDetected ? rawCall : fallbackCall;
 
-    const N = board.length === 0 ? (game === "omaha" ? 6000 : 12000) : (game === "omaha" ? 10000 : 20000);
-    const sim = simulate(hole, board, opps, N, game);
-    const eq = sim.eq;
-    const fair = 1 / (opps + 1);
-    let rec, why;
-    let madeHand = null, better = [], turnTable = null, riverTable = null;
-
-    if (board.length >= 3) {
-      const madeIdx = Math.floor(bestScore(hole, board, game) / HANDK);
-      madeHand = CAT[madeIdx];
-      const betterIdx = []; for (let i = 8; i > madeIdx; i--) betterIdx.push(i);
-      better = betterIdx.map(i => ({ hand: CAT[i], pct: Math.round((sim.oppCat[i] / sim.N * 100) * 10) / 10 }));
-      const oa = outsAnalysis(hole, board, game);
-      if (oa.turn) turnTable = { total: oa.turn.total, rows: tableRows(oa.turn.counts, oa.turn.total) };
-      if (oa.river) riverTable = { total: oa.river.total, cumulative: board.length === 3, rows: tableRows(oa.river.counts, oa.river.total) };
-    }
-
-    if (call > 0) {
-      const need = call / (pot + call);
-      why = `Equity needed = call ÷ (pot + call) = ${call} ÷ (${pot} + ${call}) = ${(need * 100).toFixed(1)}%. That's the break-even point: call this often (in equivalent spots) and you win back exactly what you put in. Simulation gives you about ${(eq * 100).toFixed(0)}% equity here, so `;
-      if (eq > need + 0.25 && eq > 0.6) rec = "RAISE"; else if (eq >= need + 0.03) rec = "CALL"; else if (eq >= need - 0.03 && board.length < 5) rec = "CALL"; else rec = "FOLD";
-      why += eq >= need ? `you're above the ${(need * 100).toFixed(1)}% you need — calling profits on average.` : `you're below the ${(need * 100).toFixed(1)}% you need — calling loses on average.`;
-      if (rec === "CALL" && eq < need + 0.03) why += " It's marginal; drawing hands with future bets can justify it.";
-    } else {
-      const fairPct = (fair * 100).toFixed(1);
-      const fairCalc = `an even share = 1 ÷ (opponents + 1) = 1 ÷ (${opps} + 1) = ${fairPct}%`;
-      if (eq > Math.max(0.6, fair + 0.2)) { rec = "BET"; why = `Well ahead of ${fairCalc}. Bet for value, roughly half to two-thirds of the pot.` }
-      else if (eq > fair + 0.08 && board.length < 5) { rec = "BET"; why = `Ahead of ${fairCalc}. A modest bet builds the pot and denies free cards.` }
-      else { rec = "CHECK"; why = `Not clearly ahead of ${fairCalc}. Check and see the next card cheaply.` }
-    }
-
-    res.status(200).json({
-      hole: hole.map(name),
-      board: board.map(name),
-      game,
-      opponents: opps,
-      opponentsDetected,
-      pot,
-      potDetected,
-      call,
-      callDetected,
-      equity: Math.round(eq * 1000) / 10,
-      recommendation: rec,
-      why,
-      madeHand,
-      better,
-      turnTable,
-      riverTable,
-    });
+    res.status(200).json(buildVerdict(hole, board, game, opps, opponentsDetected, pot, potDetected, call, callDetected));
   } catch (e) {
     console.error("advise handler exception", e);
     res.status(500).json({ error: "advise failed", detail: String(e) });
