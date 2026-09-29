@@ -8,6 +8,8 @@ export default async function handler(req, res) {
   }
   const image = req.body && req.body.image;
   if (!image || image.length > 4_000_000) return res.status(400).json({ error: "Missing or too-large image." });
+  const game = req.body && req.body.game === "omaha" ? "omaha" : "holdem";
+  const hc = game === "omaha" ? 4 : 2;
   try {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
@@ -23,7 +25,7 @@ export default async function handler(req, res) {
           role: "user",
           content: [
             { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } },
-            { type: "text", text: 'This photo shows playing cards at a poker table. Identify the player\'s two hole cards (held in hand or closest to the camera) and the community cards on the table (0, 3, 4 or 5). Use two-character codes: rank (2-9,T,J,Q,K,A) then suit (c,d,h,s), e.g. "As", "Td". Omit any card you are unsure of. Reply ONLY with JSON: {"hole":[...],"board":[...]}' },
+            { type: "text", text: `This photo shows playing cards at a poker table. Identify the player's ${hc} hole cards (held in hand or closest to the camera) and the community cards on the table (0, 3, 4 or 5). Use two-character codes: rank (2-9,T,J,Q,K,A) then suit (c,d,h,s), e.g. "As", "Td". Omit any card you are unsure of. Reply ONLY with JSON: {"hole":[...],"board":[...]}` },
           ],
         }],
       }),
