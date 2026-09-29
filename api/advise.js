@@ -121,14 +121,17 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: process.env.MODEL || "claude-sonnet-5",
-        max_tokens: 300,
-        messages: [{
-          role: "user",
-          content: [
-            { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } },
-            { type: "text", text: `This photo shows a poker table (an online poker app screen). Identify: (1) the player's ${hc} hole cards (held in hand or closest to the camera); (2) the community cards on the table (0, 3, 4 or 5). Use two-character codes: rank (2-9,T,J,Q,K,A) then suit (c,d,h,s), e.g. "As", "Td". Omit any card you are unsure of. Also read from the on-screen UI, if clearly visible: (3) "opponents": the number of other players still active in this hand (still seated with cards, not folded/sitting out), as a plain integer, or null if you can't tell; (4) "pot": the total pot size shown on screen, as a plain number with no currency symbols or commas (e.g. 45.5, not "$45.50"), or null if not visible; (5) "call": the amount currently needed to call / the outstanding bet facing the player, as a plain number, or null if there is no bet to call right now or it isn't legible. Reply ONLY with JSON: {"hole":[...],"board":[...],"opponents":<int or null>,"pot":<number or null>,"call":<number or null>}` },
-          ],
-        }],
+        max_tokens: 600,
+        messages: [
+          {
+            role: "user",
+            content: [
+              { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } },
+              { type: "text", text: `This photo shows a poker table (an online poker app screen). Identify: (1) the player's ${hc} hole cards (held in hand or closest to the camera); (2) the community cards on the table (0, 3, 4 or 5). Use two-character codes: rank (2-9,T,J,Q,K,A) then suit (c,d,h,s), e.g. "As", "Td". Omit any card you are unsure of. Also read from the on-screen UI, if clearly visible: (3) "opponents": the number of other players still active in this hand (still seated with cards, not folded/sitting out), as a plain integer, or null if you can't tell; (4) "pot": the total pot size shown on screen, as a plain number with no currency symbols or commas (e.g. 45.5, not "$45.50"), or null if not visible; (5) "call": the amount currently needed to call / the outstanding bet facing the player, as a plain number, or null if there is no bet to call right now or it isn't legible. Reply with ONLY a single JSON object and nothing else — no explanation, no markdown code fences: {"hole":[...],"board":[...],"opponents":<int or null>,"pot":<number or null>,"call":<number or null>}` },
+            ],
+          },
+          { role: "assistant", content: "{" },
+        ],
       }),
     });
     if (!r.ok) {
@@ -137,10 +140,15 @@ export default async function handler(req, res) {
       return res.status(502).json({ error: `Anthropic API returned ${r.status}`, detail: errBody.slice(0, 300) });
     }
     const j = await r.json();
-    const text = (j.content || []).map(c => c.text || "").join("");
+    const text = "{" + (j.content || []).map(c => c.text || "").join("");
     const m = text.match(/\{[\s\S]*\}/);
     if (!m) return res.status(502).json({ error: "Model reply had no parseable JSON.", detail: text.slice(0, 300) });
-    const raw = JSON.parse(m[0]);
+    let raw;
+    try {
+      raw = JSON.parse(m[0]);
+    } catch (parseErr) {
+      return res.status(502).json({ error: "Model reply had malformed JSON.", detail: text.slice(0, 300) });
+    }
 
     const seen = new Set();
     const hole = [];
