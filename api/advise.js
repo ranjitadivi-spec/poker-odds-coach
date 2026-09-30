@@ -137,22 +137,49 @@ function buildVerdict(hole, board, game, opps, opponentsDetected, pot, potDetect
   const strongAbsolute = madeIdx != null && madeIdx >= 6;   // full house, quads, straight flush
   const nutAbsolute = madeIdx != null && madeIdx >= 7;      // quads or straight flush
 
+  // Preflop hand-category classification (Hold'em only): lets the advice
+  // reference standard starting-hand groups (pocket pairs, suited broadways,
+  // AK/AQ, suited connectors) rather than relying on the equity number alone.
+  let preflopCat = null, premiumPreflop = false, playablePreflop = false;
+  if (board.length === 0 && game === "holdem" && hole.length === 2) {
+    const ranks = [hole[0] >> 2, hole[1] >> 2].sort((a, b) => b - a);
+    const suited = (hole[0] & 3) === (hole[1] & 3);
+    const isPair = ranks[0] === ranks[1];
+    if (isPair) {
+      preflopCat = `a pocket pair (${R[ranks[0]]}${R[ranks[0]]})`;
+      premiumPreflop = ranks[0] >= 9;   // JJ, QQ, KK, AA
+      playablePreflop = ranks[0] >= 4;  // 66 and up
+    } else {
+      preflopCat = `${R[ranks[0]]}${R[ranks[1]]}${suited ? " suited" : " offsuit"}`;
+      const gap = ranks[0] - ranks[1] - 1;
+      if (ranks[0] === 12 && ranks[1] >= 10) { premiumPreflop = true; playablePreflop = true; } // AK, AQ
+      else if (ranks[0] >= 10 && ranks[1] >= 8 && suited) { playablePreflop = true; } // suited broadways: KQs, KJs, QJs, JTs
+      else if (suited && gap <= 1 && ranks[1] >= 4) { playablePreflop = true; } // suited connectors/one-gappers, 65s and up
+      else if (ranks[0] === 12) { playablePreflop = true; } // any ace
+    }
+  }
+
   if (call > 0) {
     const need = call / (pot + call);
     why = `Equity needed = call ÷ (pot + call) = ${call} ÷ (${pot} + ${call}) = ${(need * 100).toFixed(1)}%. That's the break-even point: call this often (in equivalent spots) and you win back exactly what you put in. Simulation gives you about ${(eq * 100).toFixed(0)}% equity here, so `;
-    if (nutAbsolute || (eq > need + 0.25 && eq > 0.6)) rec = "RAISE";
-    else if (strongAbsolute || eq >= need + 0.03) rec = "CALL";
+    if (nutAbsolute || premiumPreflop || (eq > need + 0.25 && eq > 0.6)) rec = "RAISE";
+    else if (strongAbsolute || playablePreflop || eq >= need + 0.03) rec = "CALL";
     else if (eq >= need - 0.03 && board.length < 5) rec = "CALL";
     else rec = "FOLD";
     why += eq >= need ? `you're above the ${(need * 100).toFixed(1)}% you need — calling profits on average.` : `you're below the ${(need * 100).toFixed(1)}% you need — calling loses on average.`;
     if (strongAbsolute) why += ` On top of that, you've made ${madeHand.toLowerCase()} — a strong absolute hand in its own right, worth playing aggressively even if the equity math alone looked marginal.`;
+    else if (preflopCat && premiumPreflop) why += ` You're holding ${preflopCat} — a premium starting hand that plays well against a raise regardless of the exact equity number.`;
+    else if (preflopCat && playablePreflop && rec === "CALL") why += ` You're holding ${preflopCat} — a playable starting hand, worth seeing a flop with here.`;
     else if (rec === "CALL" && eq < need + 0.03) why += " It's marginal; drawing hands with future bets can justify it.";
   } else {
     const fairPct = (fair * 100).toFixed(1);
     const fairCalc = `an even share = 1 ÷ (opponents + 1) = 1 ÷ (${opps} + 1) = ${fairPct}%`;
     if (strongAbsolute) { rec = "BET"; why = `You've made ${madeHand.toLowerCase()} — a strong absolute hand regardless of the exact equity number. Bet for value, roughly half to two-thirds of the pot.` }
+    else if (preflopCat && premiumPreflop) { rec = "BET"; why = `You're holding ${preflopCat} — a premium starting hand. Raise here regardless of opponent count; this is a hand you want to build the pot with.` }
     else if (eq > Math.max(0.6, fair + 0.2)) { rec = "BET"; why = `Well ahead of ${fairCalc}. Bet for value, roughly half to two-thirds of the pot.` }
+    else if (preflopCat && playablePreflop) { rec = "BET"; why = `You're holding ${preflopCat} — a playable starting hand. A raise here builds the pot while you have position/hand-strength working for you, though it's not a premium — be ready to fold to heavy resistance.` }
     else if (eq > fair + 0.08 && board.length < 5) { rec = "BET"; why = `Ahead of ${fairCalc}. A modest bet builds the pot and denies free cards.` }
+    else if (preflopCat) { rec = "CHECK"; why = `You're holding ${preflopCat} — not strong enough to open-raise in most spots. Check/fold unless you're getting a cheap look.` }
     else { rec = "CHECK"; why = `Not clearly ahead of ${fairCalc}. Check and see the next card cheaply.` }
   }
 
@@ -171,6 +198,7 @@ function buildVerdict(hole, board, game, opps, opponentsDetected, pot, potDetect
     recommendation: rec,
     why,
     madeHand,
+    preflopCat,
     better,
     turnTable,
     riverTable,
