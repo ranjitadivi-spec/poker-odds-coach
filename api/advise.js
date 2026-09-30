@@ -93,6 +93,7 @@ function tableRows(counts, total) {
     const pct = counts[i] / total * 100;
     rows.push({ hand: CAT[i], outs: counts[i], pct: Math.round(pct * 10) / 10 });
   }
+  rows.sort((a, b) => b.pct - a.pct);
   return rows;
 }
 
@@ -105,28 +106,41 @@ function buildVerdict(hole, board, game, opps, opponentsDetected, pot, potDetect
   const eq = sim.eq;
   const fair = 1 / (opps + 1);
   let rec, why;
-  let madeHand = null, better = [], turnTable = null, riverTable = null;
+  let madeHand = null, madeIdx = null, better = [], turnTable = null, riverTable = null;
 
   if (board.length >= 3) {
-    const madeIdx = Math.floor(bestScore(hole, board, game) / HANDK);
+    madeIdx = Math.floor(bestScore(hole, board, game) / HANDK);
     madeHand = CAT[madeIdx];
     const betterIdx = []; for (let i = 8; i > madeIdx; i--) betterIdx.push(i);
     better = betterIdx.map(i => ({ hand: CAT[i], pct: Math.round((sim.oppCat[i] / sim.N * 100) * 10) / 10 }));
+    better.sort((a, b) => b.pct - a.pct);
     const oa = outsAnalysis(hole, board, game);
     if (oa.turn) turnTable = { total: oa.turn.total, rows: tableRows(oa.turn.counts, oa.turn.total) };
     if (oa.river) riverTable = { total: oa.river.total, cumulative: board.length === 3, rows: tableRows(oa.river.counts, oa.river.total) };
   }
 
+  // Absolute hand strength, independent of the Monte Carlo equity number:
+  // a full house or better is a strong made hand almost regardless of how
+  // many opponents are in, so let it push the recommendation up even when
+  // the raw equity math alone wouldn't clear the usual threshold.
+  const strongAbsolute = madeIdx != null && madeIdx >= 6;   // full house, quads, straight flush
+  const nutAbsolute = madeIdx != null && madeIdx >= 7;      // quads or straight flush
+
   if (call > 0) {
     const need = call / (pot + call);
     why = `Equity needed = call ÷ (pot + call) = ${call} ÷ (${pot} + ${call}) = ${(need * 100).toFixed(1)}%. That's the break-even point: call this often (in equivalent spots) and you win back exactly what you put in. Simulation gives you about ${(eq * 100).toFixed(0)}% equity here, so `;
-    if (eq > need + 0.25 && eq > 0.6) rec = "RAISE"; else if (eq >= need + 0.03) rec = "CALL"; else if (eq >= need - 0.03 && board.length < 5) rec = "CALL"; else rec = "FOLD";
+    if (nutAbsolute || (eq > need + 0.25 && eq > 0.6)) rec = "RAISE";
+    else if (strongAbsolute || eq >= need + 0.03) rec = "CALL";
+    else if (eq >= need - 0.03 && board.length < 5) rec = "CALL";
+    else rec = "FOLD";
     why += eq >= need ? `you're above the ${(need * 100).toFixed(1)}% you need — calling profits on average.` : `you're below the ${(need * 100).toFixed(1)}% you need — calling loses on average.`;
-    if (rec === "CALL" && eq < need + 0.03) why += " It's marginal; drawing hands with future bets can justify it.";
+    if (strongAbsolute) why += ` On top of that, you've made ${madeHand.toLowerCase()} — a strong absolute hand in its own right, worth playing aggressively even if the equity math alone looked marginal.`;
+    else if (rec === "CALL" && eq < need + 0.03) why += " It's marginal; drawing hands with future bets can justify it.";
   } else {
     const fairPct = (fair * 100).toFixed(1);
     const fairCalc = `an even share = 1 ÷ (opponents + 1) = 1 ÷ (${opps} + 1) = ${fairPct}%`;
-    if (eq > Math.max(0.6, fair + 0.2)) { rec = "BET"; why = `Well ahead of ${fairCalc}. Bet for value, roughly half to two-thirds of the pot.` }
+    if (strongAbsolute) { rec = "BET"; why = `You've made ${madeHand.toLowerCase()} — a strong absolute hand regardless of the exact equity number. Bet for value, roughly half to two-thirds of the pot.` }
+    else if (eq > Math.max(0.6, fair + 0.2)) { rec = "BET"; why = `Well ahead of ${fairCalc}. Bet for value, roughly half to two-thirds of the pot.` }
     else if (eq > fair + 0.08 && board.length < 5) { rec = "BET"; why = `Ahead of ${fairCalc}. A modest bet builds the pot and denies free cards.` }
     else { rec = "CHECK"; why = `Not clearly ahead of ${fairCalc}. Check and see the next card cheaply.` }
   }
@@ -230,8 +244,22 @@ export default async function handler(req, res) {
     }
 
     const seen = new Set();
-    const hole = [];
-    (raw.hole || []).slice(0, hc).forEach(t => { const c = parse(t); if (c != null && !seen.has(c)) { hole.push(c); seen.add(c) } });
+    // Once the hole cards have been read correctly once this hand, the
+    // client sends them back as lockedHole on every later screenshot - use
+    // those fixed cards instead of whatever the vision model guesses for
+    // hole this time, so a correct preflop read can't be clobbered by a
+    // later misread (this is where most suit-misread reports come from).
+    let hole = [];
+    const lockedRaw = Array.isArray(req.body.lockedHole) ? req.body.lockedHole : null;
+    if (lockedRaw && lockedRaw.length === hc) {
+      lockedRaw.forEach(t => { const c = parse(t); if (c != null && !seen.has(c)) { hole.push(c); seen.add(c) } });
+    }
+    if (hole.length !== hc) {
+      // No valid locked hand supplied - fall back to reading it fresh.
+      hole = [];
+      seen.clear();
+      (raw.hole || []).slice(0, hc).forEach(t => { const c = parse(t); if (c != null && !seen.has(c)) { hole.push(c); seen.add(c) } });
+    }
     const boardAll = [];
     (raw.board || []).slice(0, 5).forEach(t => { const c = parse(t); if (c != null && !seen.has(c)) { boardAll.push(c); seen.add(c) } });
     const allowedLens = [0, 3, 4, 5];
