@@ -55,7 +55,7 @@ function holeCountFor(game) { return game === "omaha" ? 4 : 2 }
 function simulate(hole, board, opps, N, game) {
   const hc = holeCountFor(game);
   const used = new Set([...hole, ...board]); const deck = []; for (let c = 0; c < 52; c++) if (!used.has(c)) deck.push(c);
-  const need = 5 - board.length, dl = deck.length; let win = 0, tie = 0, lose = 0;
+  const need = 5 - board.length, dl = deck.length; let win = 0, tie = 0, tieHands = 0, lose = 0;
   const oppCat = new Array(9).fill(0);
   for (let n = 0; n < N; n++) {
     const k = need + opps * hc;
@@ -64,9 +64,9 @@ function simulate(hole, board, opps, N, game) {
     const me = bestScore(hole, full, game); let best = -1, cnt = 0;
     for (let o = 0; o < opps; o++) { const oh = deck.slice(need + o * hc, need + o * hc + hc); const s = bestScore(oh, full, game); if (s > best) { best = s; cnt = 1 } else if (s === best) cnt++ }
     if (best >= 0) oppCat[Math.floor(best / HANDK)]++;
-    if (me > best) win++; else if (me === best) tie += 1 / (cnt + 1); else lose++;
+    if (me > best) win++; else if (me === best) { tie += 1 / (cnt + 1); tieHands++ } else lose++;
   }
-  return { eq: (win + tie) / N, oppCat, N };
+  return { eq: (win + tie) / N, oppCat, N, win, tie, tieHands, lose };
 }
 
 function outsAnalysis(hole, board, game) {
@@ -106,6 +106,16 @@ function buildVerdict(hole, board, game, opps, opponentsDetected, pot, potDetect
   const eq = sim.eq;
   const fair = 1 / (opps + 1);
   let rec, why;
+
+  // Plain-language walkthrough of how the "% to win" figure was reached,
+  // so it isn't just a number pulled out of the air.
+  const winPct = sim.win / sim.N * 100;
+  const tiePct = sim.tieHands / sim.N * 100;
+  const remainingBoard = 5 - board.length;
+  const dealPart = remainingBoard > 0
+    ? `${opps} random opponent hand${opps > 1 ? "s" : ""} and the remaining ${remainingBoard} board card${remainingBoard > 1 ? "s" : ""}`
+    : `${opps} random opponent hand${opps > 1 ? "s" : ""}`;
+  const equityWhy = `Equity is estimated by Monte Carlo simulation: ${N.toLocaleString()} times, we dealt out ${dealPart} from the rest of the deck and played the hand to showdown. You won outright in ${winPct.toFixed(1)}% of those deals${sim.tieHands ? ` and split the pot in a tie in another ${tiePct.toFixed(1)}%` : ""}. Equity = (wins + tie shares) ÷ simulations = ${(eq * 100).toFixed(1)}%.`;
   let madeHand = null, madeIdx = null, better = [], turnTable = null, riverTable = null;
 
   if (board.length >= 3) {
@@ -156,6 +166,7 @@ function buildVerdict(hole, board, game, opps, opponentsDetected, pot, potDetect
     call,
     callDetected,
     equity: Math.round(eq * 1000) / 10,
+    equityWhy,
     recommendation: rec,
     why,
     madeHand,
