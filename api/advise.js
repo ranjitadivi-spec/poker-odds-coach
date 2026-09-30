@@ -52,6 +52,36 @@ function bestScore(hole, board, game) {
 }
 function holeCountFor(game) { return game === "omaha" ? 4 : 2 }
 
+// Desktop-app-only betting-history feature: sanitizes the optional "players"
+// array the vision model returns when trackTable is requested, so a
+// malformed/partial model reply can't crash the response or leak junk
+// through to the client's tracker.
+function sanitizePlayers(arr) {
+  if (!Array.isArray(arr)) return [];
+  return arr.slice(0, 9).map(p => {
+    if (!p || typeof p !== "object") return null;
+    const seat = typeof p.seat === "string" && p.seat.trim() ? p.seat.trim().slice(0, 40) : null;
+    if (!seat) return null;
+    const bet = Number(p.bet);
+    const stack = Number(p.stack);
+    let cards = null;
+    if (Array.isArray(p.cards)) {
+      const cc = [];
+      const seen = new Set();
+      p.cards.slice(0, 4).forEach(t => { const c = parse(t); if (c != null && !seen.has(c)) { cc.push(name(c)); seen.add(c) } });
+      if (cc.length >= 2) cards = cc;
+    }
+    return {
+      seat,
+      bet: Number.isFinite(bet) ? bet : null,
+      stack: Number.isFinite(stack) ? stack : null,
+      folded: !!p.folded,
+      allIn: !!p.allIn,
+      cards,
+    };
+  }).filter(Boolean);
+}
+
 function simulate(hole, board, opps, N, game) {
   const hc = holeCountFor(game);
   const used = new Set([...hole, ...board]); const deck = []; for (let c = 0; c < 52; c++) if (!used.has(c)) deck.push(c);
@@ -244,6 +274,7 @@ export default async function handler(req, res) {
   }
   const image = req.body && req.body.image;
   if (!image || image.length > 4_000_000) return res.status(400).json({ error: "Missing or too-large image." });
+  const trackTable = !!req.body.trackTable;
 
   try {
     const r = await fetch("https://api.anthropic.com/v1/messages", {
@@ -261,7 +292,7 @@ export default async function handler(req, res) {
             role: "user",
             content: [
               { type: "image", source: { type: "base64", media_type: "image/jpeg", data: image } },
-              { type: "text", text: `This photo shows a poker table (an online poker app screen). Identify: (1) the player's ${hc} hole cards (held in hand or closest to the camera); (2) the community cards on the table (0, 3, 4 or 5). Use two-character codes: rank (2-9,T,J,Q,K,A) then suit (c,d,h,s), e.g. "As", "Td". Diamonds (d) and hearts (h) are both red and easy to confuse at small size — a diamond is a plain pointed rhombus with a smooth top point, while a heart has a curved double-lobe with a notch/dip at the top; look closely at the top edge of each red suit symbol before deciding which it is. Clubs (c) and spades (s) are both black and equally easy to confuse — a club is a three-lobed clover/trefoil shape (three separate rounded bumps) sitting on a stem, while a spade is a single smooth pointed leaf/teardrop shape (one point, no separate lobes) sitting on a stem; count the lobes at the top before deciding which it is.${game === "omaha" ? " This is Omaha, so 4 hole cards are shown close together and each one is smaller on screen than in a 2-card Hold'em hand — examine each of the 4 hole cards' suit individually and don't assume a card shares its neighbor's suit just because they're close together." : ""} Omit any card you are unsure of. Also read from the on-screen UI, if clearly visible: (3) "opponents": the number of other players still active in this hand (still seated with cards, not folded/sitting out), as a plain integer, or null if you can't tell; (4) "pot": the total pot size shown on screen, as a plain number with no currency symbols or commas (e.g. 45.5, not "$45.50"), or null if not visible; (5) "call": the amount currently needed to call / the outstanding bet facing the player, as a plain number, or null if there is no bet to call right now or it isn't legible. Reply with ONLY a single JSON object and nothing else — no explanation, no markdown code fences: {"hole":[...],"board":[...],"opponents":<int or null>,"pot":<number or null>,"call":<number or null>}` },
+              { type: "text", text: `This photo shows a poker table (an online poker app screen). Identify: (1) the player's ${hc} hole cards (held in hand or closest to the camera); (2) the community cards on the table (0, 3, 4 or 5). Use two-character codes: rank (2-9,T,J,Q,K,A) then suit (c,d,h,s), e.g. "As", "Td". Diamonds (d) and hearts (h) are both red and easy to confuse at small size — a diamond is a plain pointed rhombus with a smooth top point, while a heart has a curved double-lobe with a notch/dip at the top; look closely at the top edge of each red suit symbol before deciding which it is. Clubs (c) and spades (s) are both black and equally easy to confuse — a club is a three-lobed clover/trefoil shape (three separate rounded bumps) sitting on a stem, while a spade is a single smooth pointed leaf/teardrop shape (one point, no separate lobes) sitting on a stem; count the lobes at the top before deciding which it is.${game === "omaha" ? " This is Omaha, so 4 hole cards are shown close together and each one is smaller on screen than in a 2-card Hold'em hand — examine each of the 4 hole cards' suit individually and don't assume a card shares its neighbor's suit just because they're close together." : ""} Omit any card you are unsure of. Also read from the on-screen UI, if clearly visible: (3) "opponents": the number of other players still active in this hand (still seated with cards, not folded/sitting out), as a plain integer, or null if you can't tell; (4) "pot": the total pot size shown on screen, as a plain number with no currency symbols or commas (e.g. 45.5, not "$45.50"), or null if not visible; (5) "call": the amount currently needed to call / the outstanding bet facing the player, as a plain number, or null if there is no bet to call right now or it isn't legible.${trackTable ? ` Also identify every OTHER seat currently shown at the table (not the main player) and return them in a "players" array. For each seat use a SHORT STABLE LABEL based on its on-screen position relative to the main player (e.g. "top-left", "top", "top-right", "left", "right", "bottom-left", "bottom-right" — pick whichever position words best match this table's seat layout, and use that exact same label for that same physical seat every time, since it needs to be matched up across several screenshots of this same hand). For each seat also report: "bet" (the chips currently in front of that seat this betting round — a plain number, 0 if they haven't bet this round, or null if you can't tell), "stack" (their remaining stack, plain number, or null), "folded" (true if they've folded/mucked this hand), "allIn" (true if all-in), and "cards" (an array of 2-4 two-character card codes ONLY if that seat's own hole cards are currently shown face-up on screen, e.g. at showdown — otherwise omit the field or use null; never guess their cards from the back of a face-down card). Include a seat entry even when its bet is 0. Add this as a "players" array in the JSON.` : ""} Reply with ONLY a single JSON object and nothing else — no explanation, no markdown code fences: {"hole":[...],"board":[...],"opponents":<int or null>,"pot":<number or null>,"call":<number or null>${trackTable ? ',"players":[{"seat":"...","bet":<number or null>,"stack":<number or null>,"folded":<bool>,"allIn":<bool>,"cards":[...] or null}]' : ""}}` },
             ],
           },
         ],
@@ -323,7 +354,9 @@ export default async function handler(req, res) {
     const callDetected = Number.isFinite(rawCall) && rawCall >= 0;
     const call = callDetected ? rawCall : fallbackCall;
 
-    res.status(200).json(buildVerdict(hole, board, game, opps, opponentsDetected, pot, potDetected, call, callDetected));
+    const verdict = buildVerdict(hole, board, game, opps, opponentsDetected, pot, potDetected, call, callDetected);
+    if (trackTable) verdict.players = sanitizePlayers(raw.players);
+    res.status(200).json(verdict);
   } catch (e) {
     console.error("advise handler exception", e);
     res.status(500).json({ error: "advise failed", detail: String(e) });
