@@ -5,9 +5,7 @@
 <title>Poker Odds Coach</title>
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <style>
-:root{--bg:#0f1f17;--card:#173025;--ink:#eef5f0;--mute:#9db5a8;--acc:#e8c45a;--red:#ff6b6b;--ok:#5fd68a;--line:#2b4a3b;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
-@media (prefers-color-scheme:light){:root:not([data-theme="dark"]){--bg:#eef4ef;--card:#fff;--ink:#14261c;--mute:#5b7266;--acc:#a97b00;--line:#cddbd2}}
-:root[data-theme="light"]{--bg:#eef4ef;--card:#fff;--ink:#14261c;--mute:#5b7266;--acc:#a97b00;--line:#cddbd2}
+:root{--bg:#e2e2e2;--card:#fff;--ink:#14261c;--mute:#5b7266;--acc:#a97b00;--red:#d11;--ok:#1a8a3d;--line:#cddbd2;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
 :root[data-theme="dark"]{--bg:#0f1f17;--card:#173025;--ink:#eef5f0;--mute:#9db5a8;--acc:#e8c45a;--line:#2b4a3b}
 *{box-sizing:border-box}
 html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
@@ -18,7 +16,10 @@ h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--mute
 .row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
 .slot{width:52px;height:72px;border-radius:8px;border:2px dashed var(--line);display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700;background:transparent;color:var(--ink);cursor:pointer}
 .slot.f{background:#fff;color:#111;border-style:solid;border-color:#ccc}
-.slot.f.r{color:#d11}
+.slot.f.suit-d{color:#1554d6}
+.slot.f.suit-h{color:#d11}
+.slot.f.suit-c{color:#1a8a3d}
+.slot.f.suit-s{color:#111}
 .slot.sel{outline:3px solid var(--acc)}
 .gap{width:10px}
 button,.btn{font:inherit;border:0;border-radius:10px;padding:12px 14px;background:var(--acc);color:#1a1400;font-weight:700;cursor:pointer}
@@ -26,7 +27,10 @@ button.sec,.btn.sec{background:transparent;color:var(--ink);border:1px solid var
 button:disabled{opacity:.5}
 .grid{display:grid;grid-template-columns:repeat(13,1fr);gap:3px;margin-top:8px}
 .grid button{padding:8px 0;font-size:13px;border-radius:6px;background:#fff;color:#111;border:1px solid #ccc}
-.grid button.r{color:#d11}
+.grid button.suit-d{color:#1554d6}
+.grid button.suit-h{color:#d11}
+.grid button.suit-c{color:#1a8a3d}
+.grid button.suit-s{color:#111}
 .grid button:disabled{opacity:.2}
 label{font-size:13px;color:var(--mute);display:block;margin-bottom:4px}
 input[type=number]{width:100%;font:inherit;padding:10px;border-radius:8px;border:1px solid var(--line);background:transparent;color:var(--ink)}
@@ -119,17 +123,18 @@ let slots=Array(holeCount()+5).fill(null);let sel=0;let manual=false;
 const $=id=>document.getElementById(id);
 const name=c=>R[c>>2]+SYM[S[c&3]];
 const isRed=c=>{const s=S[c&3];return s==="d"||s==="h"};
+const suitClass=c=>"suit-"+S[c&3];
 function parse(t){if(typeof t!=="string"||t.length<2)return null;const r=R.indexOf(t[0].toUpperCase().replace("1","T")),s=S.indexOf(t[t.length-1].toLowerCase());return r<0||s<0?null:r*4+s}
 
 function render(){
   const hc=holeCount();
-  const mk=(i)=>{const c=slots[i];return `<div class="slot${c!=null?" f"+(isRed(c)?" r":""):""}${sel===i?" sel":""}" data-i="${i}">${c!=null?name(c):""}</div>`};
+  const mk=(i)=>{const c=slots[i];return `<div class="slot${c!=null?" f "+suitClass(c):""}${sel===i?" sel":""}" data-i="${i}">${c!=null?name(c):""}</div>`};
   $("hole").innerHTML=Array.from({length:hc},(_,i)=>mk(i)).join("");
   const b=hc;
   $("board").innerHTML=[b,b+1,b+2].map(mk).join("")+'<div class="gap"></div>'+mk(b+3)+'<div class="gap"></div>'+mk(b+4);
   document.querySelectorAll(".slot").forEach(e=>e.onclick=()=>{const i=+e.dataset.i;if(sel===i&&slots[i]!=null)slots[i]=null;sel=i;manual=true;render()});
   let g="";
-  for(let s=3;s>=0;s--)for(let r=12;r>=0;r--){const c=r*4+s;g+=`<button class="${"dh".includes(S[s])||S[s]==="h"?"r":""}" data-c="${c}" ${slots.includes(c)?"disabled":""}>${R[r]}${SYM[S[s]]}</button>`}
+  for(let s=3;s>=0;s--)for(let r=12;r>=0;r--){const c=r*4+s;g+=`<button class="${suitClass(c)}" data-c="${c}" ${slots.includes(c)?"disabled":""}>${R[r]}${SYM[S[s]]}</button>`}
   $("grid").innerHTML=g;
   $("grid").style.display=(manual&&slots[sel]==null)?"":"none";
   $("manualBtn").style.display=manual?"none":"";
@@ -218,12 +223,14 @@ function outsAnalysis(hole,board,game){
   return res;
 }
 function oddsTableHtml(title,counts,total){
-  let rows="";
+  const items=[];
   for(let i=8;i>=0;i--){
     if(!counts[i])continue;
     const pct=counts[i]/total*100;
-    rows+=`<tr><td>${CAT[i]}</td><td>${counts[i]}</td><td>${pct<0.1?"<0.1":pct.toFixed(1)}%</td></tr>`;
+    items.push({hand:CAT[i],outs:counts[i],pct});
   }
+  items.sort((a,b)=>b.pct-a.pct);
+  const rows=items.map(it=>`<tr><td>${it.hand}</td><td>${it.outs}</td><td>${it.pct<0.1?"<0.1":it.pct.toFixed(1)}%</td></tr>`).join("");
   return `<div style="font-weight:700;margin-top:10px;margin-bottom:2px">${title}</div><table class="oddsTable"><thead><tr><th>Resulting hand</th><th>Outs</th><th>%</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 
@@ -244,10 +251,9 @@ $("go").onclick=()=>{
       madeIdx=Math.floor(bestScore(hole,board,game)/371293);
       const betterIdx=[];for(let i=8;i>madeIdx;i--)betterIdx.push(i);
       if(betterIdx.length){
-        const rows=betterIdx.map(i=>{
-          const pct=sim.oppCat[i]/sim.N*100;
-          return `<div class="blist"><span>${CAT[i]}</span><b>${pct<0.1&&pct>0?"<0.1":pct.toFixed(1)}%</b></div>`;
-        }).join("");
+        const items=betterIdx.map(i=>({hand:CAT[i],pct:sim.oppCat[i]/sim.N*100}));
+        items.sort((a,b)=>b.pct-a.pct);
+        const rows=items.map(it=>`<div class="blist"><span>${it.hand}</span><b>${it.pct<0.1&&it.pct>0?"<0.1":it.pct.toFixed(1)}%</b></div>`).join("");
         betterHtml=`<div style="font-weight:700;margin-bottom:2px">Better hands possible (chance an opponent has it):</div>${rows}`;
       }else{
         betterHtml="You already have the top hand category — nothing beats "+CAT[madeIdx]+".";
@@ -259,16 +265,24 @@ $("go").onclick=()=>{
         if(oa.river)oddsHtml+=oddsTableHtml(board.length===3?`By the river (both cards to come, ${oa.river.total} combinations)`:`River card (${oa.river.total} cards left)`,oa.river.counts,oa.river.total);
       }
     }
+    // Absolute hand strength, independent of the Monte Carlo equity number:
+    // a full house or better is a strong made hand almost regardless of how
+    // many opponents are in, so let it push the recommendation up even when
+    // the raw equity math alone wouldn't clear the usual threshold.
+    const strongAbsolute=madeIdx>=6;   // full house, quads, straight flush
+    const nutAbsolute=madeIdx>=7;      // quads or straight flush
     if(call>0){
       const need=call/(pot+call);
       why=`Equity needed = call ÷ (pot + call) = ${call} ÷ (${pot} + ${call}) = ${(need*100).toFixed(1)}%. That's the break-even point: call this often (in equivalent spots) and you win back exactly what you put in. Simulation gives you about ${(eq*100).toFixed(0)}% equity here, so `;
-      if(eq>need+0.25&&eq>0.6)rec="RAISE";else if(eq>=need+0.03)rec="CALL";else if(eq>=need-0.03&&board.length<5)rec="CALL";else rec="FOLD";
+      if(nutAbsolute||(eq>need+0.25&&eq>0.6))rec="RAISE";else if(strongAbsolute||eq>=need+0.03)rec="CALL";else if(eq>=need-0.03&&board.length<5)rec="CALL";else rec="FOLD";
       why+=eq>=need?`you're above the ${(need*100).toFixed(1)}% you need — calling profits on average.`:`you're below the ${(need*100).toFixed(1)}% you need — calling loses on average.`;
-      if(rec==="CALL"&&eq<need+0.03)why+=" It's marginal; drawing hands with future bets can justify it.";
+      if(strongAbsolute)why+=` On top of that, you've made ${CAT[madeIdx].toLowerCase()} — a strong absolute hand in its own right, worth playing aggressively even if the equity math alone looked marginal.`;
+      else if(rec==="CALL"&&eq<need+0.03)why+=" It's marginal; drawing hands with future bets can justify it.";
     }else{
       const fairPct=(fair*100).toFixed(1);
       const fairCalc=`an even share = 1 ÷ (opponents + 1) = 1 ÷ (${opps} + 1) = ${fairPct}%`;
-      if(eq>Math.max(0.6,fair+0.2)){rec="BET";why=`Well ahead of ${fairCalc}. Bet for value, roughly half to two-thirds of the pot.`}
+      if(strongAbsolute){rec="BET";why=`You've made ${CAT[madeIdx].toLowerCase()} — a strong absolute hand regardless of the exact equity number. Bet for value, roughly half to two-thirds of the pot.`}
+      else if(eq>Math.max(0.6,fair+0.2)){rec="BET";why=`Well ahead of ${fairCalc}. Bet for value, roughly half to two-thirds of the pot.`}
       else if(eq>fair+0.08&&board.length<5){rec="BET";why=`Ahead of ${fairCalc}. A modest bet builds the pot and denies free cards.`}
       else{rec="CHECK";why=`Not clearly ahead of ${fairCalc}. Check and see the next card cheaply.`}
     }
