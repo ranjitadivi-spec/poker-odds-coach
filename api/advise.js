@@ -115,7 +115,8 @@ function buildVerdict(hole, board, game, opps, opponentsDetected, pot, potDetect
   const dealPart = remainingBoard > 0
     ? `${opps} random opponent hand${opps > 1 ? "s" : ""} and the remaining ${remainingBoard} board card${remainingBoard > 1 ? "s" : ""}`
     : `${opps} random opponent hand${opps > 1 ? "s" : ""}`;
-  const equityWhy = `Equity is estimated by Monte Carlo simulation: ${N.toLocaleString()} times, we dealt out ${dealPart} from the rest of the deck and played the hand to showdown. You won outright in ${winPct.toFixed(1)}% of those deals${sim.tieHands ? ` and split the pot in a tie in another ${tiePct.toFixed(1)}%` : ""}. Equity = (wins + tie shares) ÷ simulations = ${(eq * 100).toFixed(1)}%.`;
+  const tieShareStr = sim.tie.toFixed(1);
+  const equityWhy = `Equity is estimated by Monte Carlo simulation: we dealt out ${dealPart} from the rest of the deck and played the hand to showdown, ${N.toLocaleString()} times. You won outright in ${sim.win.toLocaleString()} of those ${N.toLocaleString()} simulations (${winPct.toFixed(1)}%)${sim.tieHands ? `, and split the pot in a tie in another ${sim.tieHands.toLocaleString()} (${tiePct.toFixed(1)}%, worth ${tieShareStr} tie-share${sim.tie >= 2 ? "s" : ""} once divided evenly among everyone who tied)` : ""}. Equity = (wins + tie shares) ÷ simulations = (${sim.win.toLocaleString()} + ${tieShareStr}) ÷ ${N.toLocaleString()} = ${(eq * 100).toFixed(1)}%.`;
   let madeHand = null, madeIdx = null, better = [], turnTable = null, riverTable = null;
 
   if (board.length >= 3) {
