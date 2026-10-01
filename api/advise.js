@@ -36,7 +36,18 @@ const CAT = ["High card", "Pair", "Two pair", "Three of a kind", "Straight", "Fl
 const HANDK = 371293;
 
 const HOLE_PAIRS_4 = [[0, 1], [0, 2], [0, 3], [1, 2], [1, 3], [2, 3]];
-function combos3(arr) { const n = arr.length, res = []; for (let i = 0; i < n; i++) for (let j = i + 1; j < n; j++) for (let k = j + 1; k < n; k++) res.push([arr[i], arr[j], arr[k]]); return res }
+// Generic k-combination generator (indices into arr), used both for the
+// Omaha "which 3 board cards" choice and for exact opponent-hand
+// enumeration below - replaces the old combos3-only helper.
+function combosN(arr, k) {
+  const res = [], n = arr.length, combo = [];
+  (function rec(start) {
+    if (combo.length === k) { res.push(combo.slice()); return }
+    for (let i = start; i < n; i++) { combo.push(arr[i]); rec(i + 1); combo.pop() }
+  })(0);
+  return res;
+}
+function combos3(arr) { return combosN(arr, 3) }
 function evOmaha(hole, board) {
   let best = -1;
   const triples = combos3(board);
@@ -52,21 +63,24 @@ function bestScore(hole, board, game) {
 }
 function holeCountFor(game) { return game === "omaha" ? 4 : 2 }
 
-function simulate(hole, board, opps, N, game) {
-  const hc = holeCountFor(game);
-  const used = new Set([...hole, ...board]); const deck = []; for (let c = 0; c < 52; c++) if (!used.has(c)) deck.push(c);
-  const need = 5 - board.length, dl = deck.length; let win = 0, tie = 0, tieHands = 0, lose = 0;
-  const oppCat = new Array(9).fill(0);
-  for (let n = 0; n < N; n++) {
-    const k = need + opps * hc;
-    for (let i = 0; i < k; i++) { const j = i + Math.floor(Math.random() * (dl - i)); const x = deck[i]; deck[i] = deck[j]; deck[j] = x }
-    const full = board.concat(deck.slice(0, need));
-    const me = bestScore(hole, full, game); let best = -1, cnt = 0;
-    for (let o = 0; o < opps; o++) { const oh = deck.slice(need + o * hc, need + o * hc + hc); const s = bestScore(oh, full, game); if (s > best) { best = s; cnt = 1 } else if (s === best) cnt++ }
-    if (best >= 0) oppCat[Math.floor(best / HANDK)]++;
-    if (me > best) win++; else if (me === best) { tie += 1 / (cnt + 1); tieHands++ } else lose++;
-  }
-  return { eq: (win + tie) / N, oppCat, N, win, tie, tieHands, lose };
+// ---- exact (non-random) combinatorics, replacing the old Monte Carlo ----
+// nCk via the standard multiplicative formula; deck sizes here are small
+// (well under 50) so plain floating point is exact enough for our purposes.
+function comb(n, k) {
+  if (k < 0 || k > n) return 0;
+  k = Math.min(k, n - k);
+  let r = 1;
+  for (let i = 0; i < k; i++) r = (r * (n - i)) / (i + 1);
+  return r;
+}
+// Hypergeometric "hit at least one out" probability: given `outs` live
+// cards among `deckSize` unseen cards, what's the chance at least one of
+// them appears among the next `draws` cards to come? This is the exact
+// version of the classic "outs x 2 / outs x 4" rule of thumb.
+function hitProbability(outs, deckSize, draws) {
+  if (outs <= 0 || draws <= 0 || deckSize <= 0) return 0;
+  const missProb = comb(deckSize - outs, draws) / comb(deckSize, draws);
+  return 1 - missProb;
 }
 
 function outsAnalysis(hole, board, game) {
@@ -97,49 +111,59 @@ function tableRows(counts, total) {
   return rows;
 }
 
-// Shared by both the vision path and the manual-entry path: runs the
-// simulation and builds the recommendation once hole/board cards and
-// opponents/pot/call are known, however they were obtained.
+// Exact distribution of a single random opponent's best hand category,
+// found by enumerating every possible hole-card combination left in the
+// deck (not sampling) - replaces the old Monte Carlo opponent-hand tally.
+function opponentCategoryDist(hole, board, game) {
+  const used = new Set([...hole, ...board]); const deck = []; for (let c = 0; c < 52; c++) if (!used.has(c)) deck.push(c);
+  const hc = holeCountFor(game);
+  const counts = new Array(9).fill(0);
+  let total = 0;
+  for (const combo of combosN(deck, hc)) {
+    const cat = Math.floor(bestScore(combo, board, game) / HANDK);
+    counts[cat]++; total++;
+  }
+  return total ? counts.map(c => c / total) : counts;
+}
+
+// How many opponents are still in the hand shaves equity off a made hand or
+// a draw even though we aren't simulating their cards directly: with more
+// players left to act behind you, the same hand/draw is less likely to
+// still be best by showdown. A flat multiplier per extra opponent is a
+// simple, deterministic stand-in for that (no randomness involved).
+const PER_OPPONENT_DISCOUNT = 0.12;
+const MIN_DISCOUNT_FACTOR = 0.15;
+function opponentDiscount(opps) {
+  return Math.max(MIN_DISCOUNT_FACTOR, 1 - PER_OPPONENT_DISCOUNT * (opps - 1));
+}
+
+// Rough heads-up showdown-win baseline per made-hand category, used (a) at
+// the river, where there are no more outs to count, and (b) blended into
+// the flop/turn outs calculation so an already-strong hand (e.g. a flopped
+// full house) doesn't read as low equity just because it has few outs left
+// to improve further - it was already winning most of the time as-is.
+const CATEGORY_WIN_BASELINE = [0.15, 0.35, 0.50, 0.60, 0.70, 0.80, 0.90, 0.95, 0.97];
+
+// Shared by both the vision path and the manual-entry path: works out the
+// recommendation once hole/board cards and opponents/pot/call are known,
+// however they were obtained. Equity is now calculated directly rather
+// than estimated by Monte Carlo simulation:
+//   - preflop: a flat baseline per starting-hand tier (premium/playable/other)
+//   - flop/turn: exact outs count, converted to a hit probability via the
+//     hypergeometric formula (the "rule of 2 and 4", done exactly)
+//   - river: a flat baseline per made-hand category, since there are no
+//     more outs to count once the board is complete
+// All of the above are then discounted by opponent count.
 function buildVerdict(hole, board, game, opps, opponentsDetected, pot, potDetected, call, callDetected) {
-  const N = board.length === 0 ? (game === "omaha" ? 6000 : 12000) : (game === "omaha" ? 10000 : 20000);
-  const sim = simulate(hole, board, opps, N, game);
-  const eq = sim.eq;
+  const discount = opponentDiscount(opps);
   const fair = 1 / (opps + 1);
   let rec, why;
 
-  // Plain-language walkthrough of how the "% to win" figure was reached,
-  // so it isn't just a number pulled out of the air.
-  const winPct = sim.win / sim.N * 100;
-  const tiePct = sim.tieHands / sim.N * 100;
-  const remainingBoard = 5 - board.length;
-  const dealPart = remainingBoard > 0
-    ? `${opps} random opponent hand${opps > 1 ? "s" : ""} and the remaining ${remainingBoard} board card${remainingBoard > 1 ? "s" : ""}`
-    : `${opps} random opponent hand${opps > 1 ? "s" : ""}`;
-  const tieShareStr = sim.tie.toFixed(1);
-  const equityWhy = `Equity is estimated by Monte Carlo simulation: we dealt out ${dealPart} from the rest of the deck and played the hand to showdown, ${N.toLocaleString()} times. You won outright in ${sim.win.toLocaleString()} of those ${N.toLocaleString()} simulations (${winPct.toFixed(1)}%)${sim.tieHands ? `, and split the pot in a tie in another ${sim.tieHands.toLocaleString()} (${tiePct.toFixed(1)}%, worth ${tieShareStr} tie-share${sim.tie >= 2 ? "s" : ""} once divided evenly among everyone who tied)` : ""}. Equity = (wins + tie shares) ÷ simulations = (${sim.win.toLocaleString()} + ${tieShareStr}) ÷ ${N.toLocaleString()} = ${(eq * 100).toFixed(1)}%.`;
-  let madeHand = null, madeIdx = null, better = [], turnTable = null, riverTable = null;
-
-  if (board.length >= 3) {
-    madeIdx = Math.floor(bestScore(hole, board, game) / HANDK);
-    madeHand = CAT[madeIdx];
-    const betterIdx = []; for (let i = 8; i > madeIdx; i--) betterIdx.push(i);
-    better = betterIdx.map(i => ({ hand: CAT[i], pct: Math.round((sim.oppCat[i] / sim.N * 100) * 10) / 10 }));
-    better.sort((a, b) => b.pct - a.pct);
-    const oa = outsAnalysis(hole, board, game);
-    if (oa.turn) turnTable = { total: oa.turn.total, rows: tableRows(oa.turn.counts, oa.turn.total) };
-    if (oa.river) riverTable = { total: oa.river.total, cumulative: board.length === 3, rows: tableRows(oa.river.counts, oa.river.total) };
-  }
-
-  // Absolute hand strength, independent of the Monte Carlo equity number:
-  // a full house or better is a strong made hand almost regardless of how
-  // many opponents are in, so let it push the recommendation up even when
-  // the raw equity math alone wouldn't clear the usual threshold.
-  const strongAbsolute = madeIdx != null && madeIdx >= 6;   // full house, quads, straight flush
-  const nutAbsolute = madeIdx != null && madeIdx >= 7;      // quads or straight flush
+  let madeHand = null, madeIdx = null, better = [], turnTable = null, riverTable = null, outsCount = null;
 
   // Preflop hand-category classification (Hold'em only): lets the advice
   // reference standard starting-hand groups (pocket pairs, suited broadways,
-  // AK/AQ, suited connectors) rather than relying on the equity number alone.
+  // AK/AQ, suited connectors) rather than relying on a simulated equity number.
   let preflopCat = null, premiumPreflop = false, playablePreflop = false;
   if (board.length === 0 && game === "holdem" && hole.length === 2) {
     const ranks = [hole[0] >> 2, hole[1] >> 2].sort((a, b) => b - a);
@@ -159,9 +183,80 @@ function buildVerdict(hole, board, game, opps, opponentsDetected, pot, potDetect
     }
   }
 
+  if (board.length >= 3) {
+    madeIdx = Math.floor(bestScore(hole, board, game) / HANDK);
+    madeHand = CAT[madeIdx];
+    const oa = outsAnalysis(hole, board, game);
+    if (oa.turn) turnTable = { total: oa.turn.total, rows: tableRows(oa.turn.counts, oa.turn.total) };
+    if (oa.river) riverTable = { total: oa.river.total, cumulative: board.length === 3, rows: tableRows(oa.river.counts, oa.river.total) };
+
+    // Exact "chance the best opponent already has (or ends up with) a
+    // better category than you", via the single-opponent distribution
+    // raised to the Nth-opponent order statistic (max of N independent
+    // draws) - a closed-form replacement for the old simulated tally.
+    const oppDist = opponentCategoryDist(hole, board, game);
+    const cdf = []; let acc = 0; for (let i = 0; i < 9; i++) { acc += oppDist[i]; cdf.push(acc) }
+    const betterIdx = []; for (let i = 8; i > madeIdx; i--) betterIdx.push(i);
+    better = betterIdx.map(i => {
+      const prevCdf = i > 0 ? cdf[i - 1] : 0;
+      const pMaxEqualsI = Math.pow(cdf[i], opps) - Math.pow(prevCdf, opps);
+      return { hand: CAT[i], pct: Math.round(pMaxEqualsI * 1000) / 10 };
+    });
+    better.sort((a, b) => b.pct - a.pct);
+  }
+
+  // Absolute hand strength, independent of the equity number: a full house
+  // or better is a strong made hand almost regardless of how many
+  // opponents are in, so let it push the recommendation up even when the
+  // raw equity math alone wouldn't clear the usual threshold.
+  const strongAbsolute = madeIdx != null && madeIdx >= 6;   // full house, quads, straight flush
+  const nutAbsolute = madeIdx != null && madeIdx >= 7;      // quads or straight flush
+
+  let eq, equityWhy;
+  if (board.length === 0) {
+    // No board yet, so there's nothing to count outs against: fall back to
+    // a flat baseline per starting-hand tier from the classification above.
+    let base, tierLabel;
+    if (game === "holdem") {
+      if (premiumPreflop) { base = 0.75; tierLabel = "a premium" }
+      else if (playablePreflop) { base = 0.55; tierLabel = "a playable" }
+      else { base = 0.35; tierLabel = "a speculative" }
+    } else {
+      // Omaha starting hands run closer together and aren't classified
+      // above, so use a single neutral baseline.
+      base = 0.45; tierLabel = "an unclassified Omaha";
+    }
+    eq = Math.max(0, Math.min(0.99, base * discount));
+    equityWhy = `There's no board yet, so there are no outs to count. Preflop equity is approximated from standard starting-hand tiers instead: ${preflopCat ? `${preflopCat} is treated as ${tierLabel} holding` : `this is treated as ${tierLabel} holding`} (~${(base * 100).toFixed(0)}% baseline heads-up). With ${opps} opponent${opps > 1 ? "s" : ""} in the pot, that's discounted to about ${(eq * 100).toFixed(1)}%.`;
+  } else if (board.length === 5) {
+    // Hand is complete - no more cards to come, so no outs either. Fall
+    // back to a flat baseline per made-hand category instead.
+    const base = CATEGORY_WIN_BASELINE[madeIdx];
+    eq = Math.max(0, Math.min(0.99, base * discount));
+    equityWhy = `The board is complete, so there are no more outs to count. As a rule of thumb, ${madeHand.toLowerCase()} is worth roughly ${(base * 100).toFixed(0)}% heads-up at showdown; with ${opps} opponent${opps > 1 ? "s" : ""} still in, that's discounted to about ${(eq * 100).toFixed(1)}%.`;
+  } else {
+    // Flop (2 cards to come) or turn (1 card to come): count exact outs -
+    // deck cards that would improve the hand beyond its current category -
+    // and convert to a hit probability with the hypergeometric formula.
+    // Blended with the current category's own baseline win rate, so an
+    // already-strong made hand (e.g. a flopped full house, with few outs
+    // left to improve further) still reads as high equity rather than
+    // scoring near zero just because there's little left to draw to.
+    const deckSize = 52 - hole.length - board.length;
+    const draws = 5 - board.length;
+    const table = board.length === 3 ? turnTable : riverTable;
+    outsCount = table ? table.rows.reduce((sum, row) => sum + (CAT.indexOf(row.hand) > madeIdx ? row.outs : 0), 0) : 0;
+    const rawHit = hitProbability(outsCount, deckSize, draws);
+    const baseline = CATEGORY_WIN_BASELINE[madeIdx];
+    const combined = baseline + (1 - baseline) * rawHit;
+    eq = Math.max(0, Math.min(0.99, combined * discount));
+    const streetWord = draws === 2 ? "two cards to come" : "one card to come";
+    equityWhy = `You currently have ${madeHand.toLowerCase()} (worth roughly ${(baseline * 100).toFixed(0)}% heads-up as-is), plus ${outsCount} out${outsCount === 1 ? "" : "s"} — cards left in the deck that improve you further — out of ${deckSize} unseen cards, with ${streetWord}. By the exact hypergeometric odds (no simulation involved), that's a ${(rawHit * 100).toFixed(1)}% chance of hitting at least one of those outs, for a combined ${(combined * 100).toFixed(1)}% before opponents. With ${opps} opponent${opps > 1 ? "s" : ""} in the pot, that's discounted to about ${(eq * 100).toFixed(1)}%.`;
+  }
+
   if (call > 0) {
     const need = call / (pot + call);
-    why = `Equity needed = call ÷ (pot + call) = ${call} ÷ (${pot} + ${call}) = ${(need * 100).toFixed(1)}%. That's the break-even point: call this often (in equivalent spots) and you win back exactly what you put in. Simulation gives you about ${(eq * 100).toFixed(0)}% equity here, so `;
+    why = `Equity needed = call ÷ (pot + call) = ${call} ÷ (${pot} + ${call}) = ${(need * 100).toFixed(1)}%. That's the break-even point: call this often (in equivalent spots) and you win back exactly what you put in. This hand is worked out at about ${(eq * 100).toFixed(0)}% equity, so `;
     if (nutAbsolute || premiumPreflop || (eq > need + 0.25 && eq > 0.6)) rec = "RAISE";
     else if (strongAbsolute || playablePreflop || eq >= need + 0.03) rec = "CALL";
     else if (eq >= need - 0.03 && board.length < 5) rec = "CALL";
