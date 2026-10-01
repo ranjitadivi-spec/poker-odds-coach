@@ -286,7 +286,12 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         model: process.env.MODEL || "claude-sonnet-5",
-        max_tokens: 600,
+        // trackTable asks the model to also emit a "players" array (up to 9
+        // seats, several fields each), which can easily run past the plain
+        // 600-token budget that's enough for just hole/board/opponents/pot/
+        // call - a truncated reply is exactly what shows up to the client
+        // as "Model reply had malformed JSON.", so give it more room then.
+        max_tokens: trackTable ? 1400 : 600,
         messages: [
           {
             role: "user",
